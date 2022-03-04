@@ -390,6 +390,37 @@
     }];
 }
 
+
+- (IBAction)importFromVLESSLinks:(id)sender {
+    [self askInputWithPrompt:@"V2RayX will try importing vless:// links. analysis support By @tzmax" handler:^(NSString *inputStr) {
+        inputStr = [inputStr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([inputStr length] != 0) {
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+                ServerProfile* p = [ConfigImporter importFromVLESSOfXray:inputStr];
+                NSInteger vmessCount = 0;
+                NSInteger otherCount = 0;
+                if (p) {
+                    [self.profiles addObject:p];
+                    vmessCount = 1;
+                }
+                NSDictionary* ssdResult = [ConfigImporter importFromSubscriptionOfSSD:inputStr];
+                for (NSDictionary* d in ssdResult[@"other"]) {
+                    [self.outbounds addObject:[d mutableDeepCopy]];
+                    otherCount += 1;
+                }
+                NSMutableDictionary* p2 = [ConfigImporter importFromHTTPSubscription:inputStr];
+                if (p2) {
+                    [self.profiles addObjectsFromArray:p2[@"vmess"]];
+                    [self.outbounds addObjectsFromArray:p2[@"other"]];
+                    vmessCount += [p2[@"vmess"] count];
+                    otherCount += [p2[@"other"] count];
+                }
+                [self presentImportResultOfVmessCount:vmessCount otherCount:otherCount ruleSetCount:0];
+            });
+        }
+    }];
+}
+
 - (IBAction)importFromJSONFiles:(id)sender {
     NSOpenPanel* openPanel = [NSOpenPanel openPanel];
     [openPanel setCanChooseFiles:YES];
