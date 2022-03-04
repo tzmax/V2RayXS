@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSMutableDictionary*)ssOutboundFromSSLink:(NSString*)link;
 + (NSMutableDictionary*)ssOutboundFromSSConfig:(NSDictionary*)jsonObject;
 + (ServerProfile*)importFromVmessOfV2RayN:(NSString*)vmessStr;
++ (ServerProfile*)importFromVLESSOfXray:(NSString*)vlessStr;
 + (NSMutableDictionary*)importFromHTTPSubscription:(NSString*)httpLink;
 + (NSMutableDictionary*)importFromStandardConfigFiles:(NSArray*)files;
 + (NSMutableDictionary*)validateRuleSet:(NSMutableDictionary*)set;

@@ -404,6 +404,107 @@
     return newProfile;
 }
 
+// 目前为初步提案, 详情请见 VMessAEAD / VLESS 分享链接标准提案 https://github.com/XTLS/Xray-core/issues/91
++ (ServerProfile*)importFromVLESSOfXray:(NSString*)vlessStr {
+    if ([vlessStr length] < 9 || ![[[vlessStr substringToIndex:8] lowercaseString] isEqualToString:@"vless://"]) {
+        return nil;
+    }
+    
+    // NSError *urlError = nil;
+    NSURL *url = [NSURL URLWithString:vlessStr];
+    
+    // 处理 fields 数据
+    NSMutableDictionary *sharedServer = [[NSMutableDictionary alloc] init];
+    NSArray *urlComponents = [url.query componentsSeparatedByString:@"&"];
+    for (NSString *keyValuePair in urlComponents)
+    {
+        NSArray *pairComponents = [keyValuePair componentsSeparatedByString:@"="];
+        NSString *key = [[pairComponents firstObject] stringByRemovingPercentEncoding];
+        NSString *value = [[pairComponents lastObject] stringByRemovingPercentEncoding];
+        if ([key length] == 0) {
+            continue;
+        }
+        [sharedServer setObject:value forKey:key];
+    }
+    
+    // NSString *urlStr = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:&urlError];
+     
+//    if (urlError) {
+//        return nil;
+//    }
+    
+    ServerProfile* newProfile = [[ServerProfile alloc] init];
+    newProfile.outboundTag = nilCoalescing([url fragment], @"VLESS");
+    newProfile.address = nilCoalescing([url host], @"");
+    newProfile.port = [nilCoalescing([url port], @0) intValue];
+    newProfile.userId = nilCoalescing([url user], newProfile.userId);
+//    newProfile.alterId = [nilCoalescing([sharedServer objectForKey:@"aid"], @0) intValue];
+    NSDictionary *netWorkDict = @{@"tcp": @0, @"kcp": @1, @"ws":@2, @"h2":@3 };
+ 
+    if ([sharedServer objectForKey:@"type"] && [netWorkDict objectForKey:[sharedServer objectForKey:@"type"]]) {
+        newProfile.network = [netWorkDict[sharedServer[@"type"]] intValue];
+    }
+    NSMutableDictionary* streamSettings = [newProfile.streamSettings mutableDeepCopy];
+    switch (newProfile.network) {
+        case tcp:
+            if (![sharedServer objectForKey:@"type"] || !([sharedServer[@"type"] isEqualToString:@"none"] || [sharedServer[@"type"] isEqualToString:@"http"])) {
+                break;
+            }
+            streamSettings[@"tcpSettings"][@"header"][@"type"] = sharedServer[@"type"];
+            if ([streamSettings[@"tcpSettings"][@"header"][@"type"] isEqualToString:@"http"]) {
+                if ([sharedServer objectForKey:@"host"]) {
+                    streamSettings[@"tcpSettings"][@"header"][@"host"] = [sharedServer[@"host"] componentsSeparatedByString:@","];
+                }
+            }
+            break;
+        case kcp:
+            if (![sharedServer objectForKey:@"type"]) {
+                break;
+            }
+            if (![@{@"none": @0, @"srtp": @1, @"utp": @2, @"wechat-video":@3, @"dtls":@4, @"wireguard":@5} objectForKey:sharedServer[@"type"]]) {
+                break;
+            }
+            streamSettings[@"kcpSettings"][@"header"][@"type"] = sharedServer[@"type"];
+            break;
+        case ws:
+            if ([[sharedServer objectForKey:@"host"] containsString:@";"]) {
+                NSArray *tempPathHostArray = [[sharedServer objectForKey:@"host"] componentsSeparatedByString:@";"];
+                streamSettings[@"wsSettings"][@"path"] = tempPathHostArray[0];
+                streamSettings[@"wsSettings"][@"headers"][@"Host"] = tempPathHostArray[1];
+            }
+            else {
+                streamSettings[@"wsSettings"][@"path"] = nilCoalescing([sharedServer objectForKey:@"path"], @"");
+                streamSettings[@"wsSettings"][@"headers"][@"Host"] = nilCoalescing([sharedServer objectForKey:@"host"], @"");
+            }
+            break;
+        case http:
+            if ([[sharedServer objectForKey:@"host"] containsString:@";"]) {
+                NSArray *tempPathHostArray = [[sharedServer objectForKey:@"host"] componentsSeparatedByString:@";"];
+                streamSettings[@"wsSettings"][@"path"] = tempPathHostArray[0];
+                streamSettings[@"wsSettings"][@"headers"][@"Host"] = [tempPathHostArray[1] componentsSeparatedByString:@","];
+            }
+            else {
+                streamSettings[@"httpSettings"][@"path"] = nilCoalescing([sharedServer objectForKey:@"path"], @"");
+                if (![sharedServer objectForKey:@"host"]) {
+                    break;
+                };
+                if ([[sharedServer objectForKey:@"host"] length] > 0) {
+                    streamSettings[@"httpSettings"][@"host"] = [[sharedServer objectForKey:@"host"] componentsSeparatedByString:@","];
+                }
+            }
+            break;
+        default:
+            break;
+    }
+    if ([sharedServer objectForKey:@"tls"] && [sharedServer[@"tls"] isEqualToString:@"tls"]) {
+        streamSettings[@"security"] = @"tls";
+        streamSettings[@"tlsSettings"][@"serverName"] = newProfile.address;
+    }
+    newProfile.streamSettings = streamSettings;
+    return newProfile;
+}
+
+
 // https://github.com/CGDF-Github/SSD-Windows/wiki/订阅链接协定
 + (NSMutableDictionary* _Nonnull)importFromSubscriptionOfSSD: (NSString* _Nonnull)ssdLink {
     NSMutableDictionary* result = EMPTY_IMPORT_RESULT;
