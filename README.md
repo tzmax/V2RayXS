@@ -1,4 +1,4 @@
-# V2RayX: A simple GUI for V2Ray on macOS
+# V2RayXS: A simple GUI for Xray on macOS
 
 [![Build Status](https://travis-ci.org/tzmax/V2RayXS.svg?branch=master)](https://travis-ci.org/tzmax/V2RayXS)
 
