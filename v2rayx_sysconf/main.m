@@ -52,13 +52,13 @@ int main(int argc, const char * argv[])
             
             NSDictionary* originalSets;
             if ([mode isEqualToString:@"save"]) {
-                [sets writeToURL:[NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/Library/Application Support/V2RayX/system_proxy_backup.plist",NSHomeDirectory()]] atomically:NO];
+                [sets writeToURL:[NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_proxy_backup.plist",NSHomeDirectory()]] atomically:NO];
                 return 0;
             }
             
             // 遍历系统中的网络设备列表，设置 AirPort 和 Ethernet 的代理
             if([mode isEqualToString:@"restore"]) {
-                originalSets = [NSDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/Library/Application Support/V2RayX/system_proxy_backup.plist",NSHomeDirectory()]]];
+                originalSets = [NSDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_proxy_backup.plist",NSHomeDirectory()]]];
             }
             for (NSString *key in [sets allKeys]) {
                 NSMutableDictionary *dict = [sets objectForKey:key];
