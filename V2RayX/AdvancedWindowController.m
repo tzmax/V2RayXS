@@ -97,7 +97,7 @@
     
     
     // core path
-    self.corePathField.stringValue = [NSString stringWithFormat:@"%@/Library/Application Support/V2RayX/v2ray-core/",NSHomeDirectory()];
+    self.corePathField.stringValue = [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/xray-core/",NSHomeDirectory()];
     self.enableRestore = configWindowController.enableRestore;
     
     self.enableEncryption = configWindowController.enableEncryption;

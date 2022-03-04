@@ -9,7 +9,7 @@
 #import <Cocoa/Cocoa.h>
 #import "sysconf_version.h"
 #import "utilities.h"
-#define kV2RayXHelper @"/Library/Application Support/V2RayX/v2rayx_sysconf"
+#define kV2RayXHelper @"/Library/Application Support/V2RayXS/v2rayx_sysconf"
 #define kV2RayXSettingVersion 4
 
 #define webServerPort 8070
