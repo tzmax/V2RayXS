@@ -9,7 +9,7 @@
 "1UK-8n-QPP.title" = "自定义工具栏...";
 
 /* Class = "NSMenuItem"; title = "V2RayX"; ObjectID = "1Xt-HY-uBw"; */
-"1Xt-HY-uBw.title" = "V2RayX";
+"1Xt-HY-uBw.title" = "V2RayXS";
 
 /* Class = "NSMenu"; title = "Find"; ObjectID = "1b7-l0-nxx"; */
 "1b7-l0-nxx.title" = "查找";
@@ -54,7 +54,7 @@
 "4EN-yA-p0u.title" = "Find";
 
 /* Class = "NSMenuItem"; title = "Quit V2RayX"; ObjectID = "4sb-4s-VLi"; */
-"4sb-4s-VLi.title" = "退出 V2RayX";
+"4sb-4s-VLi.title" = "退出 V2RayXS";
 
 /* Class = "NSMenuItem"; title = "Edit"; ObjectID = "5QF-Oa-p0T"; */
 "5QF-Oa-p0T.title" = "Edit";
@@ -66,7 +66,7 @@
 "5Vv-lz-BsD.title" = "Copy Style";
 
 /* Class = "NSMenuItem"; title = "About V2RayX"; ObjectID = "5kV-Vb-QxS"; */
-"5kV-Vb-QxS.title" = "关于 V2RayX";
+"5kV-Vb-QxS.title" = "关于 V2RayXS";
 
 /* Class = "NSMenuItem"; title = "Redo"; ObjectID = "6dh-zS-Vam"; */
 "6dh-zS-Vam.title" = "Redo";
@@ -123,7 +123,7 @@
 "F2S-fz-NVQ.title" = "帮助";
 
 /* Class = "NSMenuItem"; title = "V2RayX Help"; ObjectID = "FKE-Sm-Kum"; */
-"FKE-Sm-Kum.title" = "V2RayX Help";
+"FKE-Sm-Kum.title" = "V2RayXS Help";
 
 /* Class = "NSMenuItem"; title = "Text"; ObjectID = "Fal-I4-PZk"; */
 "Fal-I4-PZk.title" = "Text";
@@ -204,7 +204,7 @@
 "OaQ-X3-Vso.title" = "Baseline";
 
 /* Class = "NSMenuItem"; title = "Hide V2RayX"; ObjectID = "Olw-nP-bQN"; */
-"Olw-nP-bQN.title" = "Hide V2RayX";
+"Olw-nP-bQN.title" = "Hide V2RayXS";
 
 /* Class = "NSMenuItem"; title = "Find Previous"; ObjectID = "OwM-mh-QMV"; */
 "OwM-mh-QMV.title" = "Find Previous";
