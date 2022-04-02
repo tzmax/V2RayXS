@@ -31,6 +31,7 @@ typedef enum NetWorkType : NSUInteger {
 -(ServerProfile*)deepCopy;
 
 @property (nonatomic) NSString* address;
+@property (nonatomic) NSString* protocol;
 @property (nonatomic) NSUInteger port;
 @property (nonatomic) NSString* userId;
 @property (nonatomic) NSUInteger alterId;

@@ -69,8 +69,10 @@
     // copy data
     _profiles = [[NSMutableArray alloc] init];
     _outbounds = [[NSMutableArray alloc] init];
+    
     for (NSDictionary *p in _appDelegate.profiles) {
-        if ([@"vmess" isEqualToString:p[@"protocol"]] && [p[@"settings"][@"vnext"] count] == 1) {
+        // this old conditions is [@"vmess" isEqualToString:p[@"protocol"]] && [p[@"settings"][@"vnext"] count] == 1
+        if (([@"vmess" isEqualToString:p[@"protocol"]] || [@"vless" isEqualToString:p[@"protocol"]]) && [p[@"settings"][@"vnext"] count] == 1) {
             [_profiles addObject:[ServerProfile profilesFromJson:p][0]];
         } else {
             [_outbounds addObject:p];
