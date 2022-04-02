@@ -1,12 +1,12 @@
 {
   "images" : [
     {
-      "filename" : "vx 510_%18@1x.png",
+      "filename" : "vx_16_h.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
-      "filename" : "vx 510_%18@2x.png",
+      "filename" : "vx_32_h.png",
       "idiom" : "universal",
       "scale" : "2x"
     },
