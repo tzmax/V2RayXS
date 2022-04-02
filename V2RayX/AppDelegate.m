@@ -605,13 +605,13 @@ static AppDelegate *appDelegate;
 
 - (void)updateMenus {
     if (proxyState) {
-        [_v2rayStatusItem setTitle:@"v2ray-core: loaded"];
+        [_v2rayStatusItem setTitle:@"xray-core: loaded"];
         [_enableV2rayItem setTitle:@"Unload core"];
         NSImage *icon = [NSImage imageNamed:@"statusBarIcon"];
         [icon setTemplate:YES];
         [_statusBarItem setImage:icon];
     } else {
-        [_v2rayStatusItem setTitle:@"v2ray-core: unloaded"];
+        [_v2rayStatusItem setTitle:@"xray-core: unloaded"];
         [_enableV2rayItem setTitle:@"Load core"];
         [_statusBarItem setImage:[NSImage imageNamed:@"statusBarIcon_disabled"]];
     }
@@ -961,7 +961,7 @@ static AppDelegate *appDelegate;
         
     }
 
-//    NSLog(@"%@", allOutbounds);
+    // NSLog(@"%@", allOutbounds);
     BOOL usebalance = false;
     for (NSDictionary* rule in fullConfig[@"routing"][@"rules"]) {
         if (rule[@"balancerTag"] && !rule[@"outboundTag"]) {

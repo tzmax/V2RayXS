@@ -12,6 +12,7 @@
 - (ServerProfile*)init {
     self = [super init];
     if (self) {
+        [self setProtocol:@"vmess"];
         [self setAddress:@"server.cc"];
         [self setPort:10086];
         [self setUserId:@"00000000-0000-0000-0000-000000000000"];
@@ -74,8 +75,9 @@
 }
 
 + (NSArray*)profilesFromJson:(NSDictionary*)outboundJson {
-    if (![outboundJson[@"protocol"] isKindOfClass:[NSString class]]
-        || ![outboundJson[@"protocol"] isEqualToString:@"vmess"] ) {
+    // this old: || ![outboundJson[@"protocol"] isEqualToString:@"vmess"]
+    if (![outboundJson[@"protocol"] isKindOfClass:[NSString class]] || (
+                                                                        ![outboundJson[@"protocol"] isEqualToString:@"vmess"] && ![outboundJson[@"protocol"] isEqualToString:@"vless"]         )) {
         return @[];
     }
     NSMutableArray* profiles = [[NSMutableArray alloc] init];
@@ -85,6 +87,7 @@
     }
     for (NSDictionary* vnext in [outboundJson valueForKeyPath:@"settings.vnext"]) {
         ServerProfile* profile = [[ServerProfile alloc] init];
+        profile.protocol = nilCoalescing(outboundJson[@"protocol"], @"vmess");
         profile.address = nilCoalescing(vnext[@"address"], @"127.0.0.1");
         profile.outboundTag = nilCoalescing(outboundJson[@"tag"], @"");
         profile.port = [vnext[@"port"] unsignedIntegerValue];
@@ -119,6 +122,7 @@
 
 -(ServerProfile*)deepCopy {
     ServerProfile* aCopy = [[ServerProfile alloc] init];
+    aCopy.protocol = [NSString stringWithString:nilCoalescing(self.protocol, @"")];
     aCopy.address = [NSString stringWithString:nilCoalescing(self.address, @"")];
     aCopy.port = self.port;
     aCopy.userId = [NSString stringWithString:nilCoalescing(self.userId, @"")];
@@ -140,7 +144,7 @@
     @{
       @"sendThrough": sendThrough,
       @"tag": nilCoalescing(outboundTag, @""),
-      @"protocol": @"vmess",
+      @"protocol": nilCoalescing(protocol, @"vmess"),
       @"settings": [@{
               @"vnext": @[
                       @{
@@ -151,7 +155,8 @@
                                       @"id": userId != nil ? [userId stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]: @"",
                                       @"alterId": [NSNumber numberWithUnsignedInteger:alterId],
                                       @"security": VMESS_SECURITY_LIST[security],
-                                      @"level": [NSNumber numberWithUnsignedInteger:level]
+                                      @"level": [NSNumber numberWithUnsignedInteger:level],
+                                      @"encryption": @"none"
                                       }
                                   ]
                           }
@@ -160,9 +165,16 @@
       @"streamSettings": fullStreamSettings,
       @"mux": muxSettings,
       };
+    
+//    if([@"vless" isEqualToString:result[@"protocol"]]) {
+//        // infra/conf: VLESS users: please add/set "encryption":"none" for every user
+//        result[@"settings"][0][@"vnext"][0][@"users"][0][@"encryption"] = @"none";
+//    }
+//
     return [result mutableCopy];
 }
 
+@synthesize protocol;
 @synthesize address;
 @synthesize port;
 @synthesize userId;
