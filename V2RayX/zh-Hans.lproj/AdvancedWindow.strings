@@ -44,8 +44,8 @@
 /* Class = "NSButtonCell"; title = "Edit list"; ObjectID = "E4s-0q-jVZ"; */
 "E4s-0q-jVZ.title" = "编辑列表";
 
-/* Class = "NSTextFieldCell"; title = "All the configuration information are stored in ~/Library/Preferences/org.ut.cenmrev.v2rayx.plist. In case the information is leaked to other unauthorized programs or individuals, set a password and V2RayX will use AES-256-ECB to encrypt the information."; ObjectID = "EAT-73-Qh6"; */
-"EAT-73-Qh6.title" = "所有配置信息都存储在〜/Library/Preferences/org.ut.cenmrev.v2rayx.plist中。如果信息泄露给其他未授权的程序或个人，请设置密码，V2RayX将使用AES-256-ECB加密信息。";
+/* Class = "NSTextFieldCell"; title = "All the configuration information are stored in ~/Library/Preferences/org.ut.cenmrev.v2rayxs.plist. In case the information is leaked to other unauthorized programs or individuals, set a password and V2RayXS will use AES-256-ECB to encrypt the information."; ObjectID = "EAT-73-Qh6"; */
+"EAT-73-Qh6.title" = "所有配置信息都存储在〜/Library/Preferences/org.ut.cenmrev.v2rayxs.plist中。如果信息泄露给其他未授权的程序或个人，请设置密码，V2RayXS 将使用AES-256-ECB加密信息。";
 
 /* Class = "NSTextFieldCell"; title = "To provide domain and IP rules, follow this format:\n    separate domains and ips with a line `---`.\nExamples:\n1.\n    v2ray.com\n    ----\n    10.0.0.0/8\n    geoip:private\nwill match traffic with (a destination domain includes \"v2ray.com\") AND (a destination IP in range of 10.0.0.0/8 OR a private destination IP)\n2.\n    domain:v2ray.com\n    ----\nwill match traffic with a destination domain of v2ray.com and *.v2ray.com.\n3.\n    ----\n    geoip:private\nwill match all private IPs."; ObjectID = "EXS-dL-5V7"; */
 "EXS-dL-5V7.title" = "IP及域名请遵循以下格式:\n    域名和IP区域请使用`---`来分隔.\n示例:\n1.\n    v2ray.com\n    ----\n    10.0.0.0/8\n    geoip:private\n将会匹配v2ray.com以及10.0.0.0/8范围内的IP地址和特定的IP地址\n2.\n    domain:v2ray.com\n    ----\n将会匹配v2ray.com以及*.v2ray.com\n3.\n    ----\n    geoip:private\n将会匹配所有特定的IP地址";
