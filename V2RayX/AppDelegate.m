@@ -93,10 +93,10 @@ static AppDelegate *appDelegate;
     [self addObserver:self forKeyPath:@"selectedPacFileName" options:NSKeyValueObservingOptionNew context:nil];
     
     // create a serial queue used for NSTask operations
-    taskQueue = dispatch_queue_create("cenmrev.v2rayx.nstask", DISPATCH_QUEUE_SERIAL);
+    taskQueue = dispatch_queue_create("cenmrev.v2rayxs.nstask", DISPATCH_QUEUE_SERIAL);
     // create a loop to run core
     coreLoopSemaphore = dispatch_semaphore_create(0);
-    coreLoopQueue = dispatch_queue_create("cenmrev.v2rayx.coreloop", DISPATCH_QUEUE_SERIAL);
+    coreLoopQueue = dispatch_queue_create("cenmrev.v2rayxs.coreloop", DISPATCH_QUEUE_SERIAL);
     
     
     dispatch_async(coreLoopQueue, ^{
@@ -152,7 +152,7 @@ static AppDelegate *appDelegate;
     self.encryptionKey = @"";
     if (_enableEncryption && ([profiles count] > 0 || [_subscriptions count] > 0)) {
         NSUserNotification* notification = [[NSUserNotification alloc] init];
-        notification.identifier = [NSString stringWithFormat:@"cenmrev.v2rayx.passwork.%@", [NSUUID UUID]];
+        notification.identifier = [NSString stringWithFormat:@"cenmrev.v2rayxs.passwork.%@", [NSUUID UUID]];
         notification.title = @"Input Password";
         notification.informativeText = @"input your password to continue";
         notification.soundName = NSUserNotificationDefaultSoundName;
@@ -243,7 +243,7 @@ static AppDelegate *appDelegate;
     NSAlert *installAlert = [[NSAlert alloc] init];
     [installAlert addButtonWithTitle:@"Install"];
     [installAlert addButtonWithTitle:@"Quit"];
-    [installAlert setMessageText:@"V2RayX needs to install a small tool to /Library/Application Support/V2RayXS/ with administrator privileges to set system proxy quickly.\nOtherwise you need to type in the administrator password every time you change system proxy through V2RayX."];
+    [installAlert setMessageText:@"V2RayXS needs to install a small tool to /Library/Application Support/V2RayXS/ with administrator privileges to set system proxy quickly.\nOtherwise you need to type in the administrator password every time you change system proxy through V2RayXS."];
     if ([installAlert runModal] == NSAlertFirstButtonReturn) {
         NSLog(@"start install");
         NSString *helperPath = [NSString stringWithFormat:@"%@/%@", [[NSBundle mainBundle] resourcePath], @"install_helper.sh"];
@@ -498,7 +498,7 @@ static AppDelegate *appDelegate;
     //unload v2ray
     //runCommandLine(@"/bin/launchctl", @[@"unload", plistPath]);
     [self unloadV2ray];
-    NSLog(@"V2RayX quiting, V2Ray core unloaded.");
+    NSLog(@"V2RayXS quiting, Xray core unloaded.");
     //remove log file
     [[NSFileManager defaultManager] removeItemAtPath:logDirPath error:nil];
     //save application status
@@ -510,7 +510,7 @@ static AppDelegate *appDelegate;
 }
 
 - (IBAction)showHelp:(id)sender {
-    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://www.v2ray.com"]];
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io"]];
 }
 
 // v2rayx status part
@@ -524,7 +524,7 @@ static AppDelegate *appDelegate;
 // or 2. proxy state was on and now is turned off, and the proxy mode is non-manual => happens when didChangeStatus
 
 -(void)backupSystemProxy {
-    SCPreferencesRef prefRef = SCPreferencesCreate(nil, CFSTR("V2RayX"), nil);
+    SCPreferencesRef prefRef = SCPreferencesCreate(nil, CFSTR("V2RayXS"), nil);
     NSDictionary* sets = (__bridge NSDictionary *)SCPreferencesGetValue(prefRef, kSCPrefNetworkServices);
     [sets writeToURL:[NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_proxy_backup.plist",NSHomeDirectory()]] atomically:NO];
 }
@@ -867,7 +867,7 @@ static AppDelegate *appDelegate;
     backup[@"outbounds"] = self.profiles;
     backup[@"routings"] = self.routingRuleSets;
     NSData* backupData = [NSJSONSerialization dataWithJSONObject:backup options:NSJSONWritingPrettyPrinted error:nil];
-    NSString* backupPath = [NSString stringWithFormat:@"%@/v2rayx_backup_%@.json", NSHomeDirectory(), dateString];
+    NSString* backupPath = [NSString stringWithFormat:@"%@/v2rayxs_backup_%@.json", NSHomeDirectory(), dateString];
     
     [backupData writeToFile:backupPath atomically:YES];
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:backupPath]]];
