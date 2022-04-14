@@ -1,5 +1,7 @@
 # V2RayXS: A simple GUI for Xray on macOS
 
+![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/tzmax/V2RayXS)
+![GitHub release (latest by date)](https://img.shields.io/github/downloads/tzmax/V2RayXS/latest/total)
 [![Build Status](https://travis-ci.org/tzmax/V2RayXS.svg?branch=master)](https://travis-ci.org/tzmax/V2RayXS)
 
 **Attention**: If you want to use v2ray-core version please install the original project. <https://github.com/Cenmrev/V2RayX>
