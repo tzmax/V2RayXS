@@ -303,18 +303,27 @@
         NSArray *decodedDataArray = [decodedDataStr componentsSeparatedByString:@"\n"];
         for (id linkStr in decodedDataArray) {
             if ([linkStr length] != 0) {
-                ServerProfile* p = [ConfigImporter importFromVmessOfV2RayN:linkStr];
-                if (p) {
-                    [result[@"vmess"] addObject:p];
+                @try {
+                    ServerProfile* p = [ConfigImporter importFromVmessOfV2RayN:linkStr];
+                    if (p) {
+                        [result[@"vmess"] addObject:p];
+                        continue;
+                    }
+                    ServerProfile* l = [ConfigImporter importFromVLESSOfXray:linkStr];
+                    if (l) {
+                        [result[@"vless"] addObject:l];
+                        continue;
+                    }
+                    NSMutableDictionary* outbound = [ConfigImporter ssOutboundFromSSLink:linkStr];
+                    if (outbound) {
+                        [result[@"other"] addObject:outbound];
+                        continue;
+                    }
+                    NSMutableDictionary* ssdResults = [ConfigImporter importFromSubscriptionOfSSD:linkStr];
+                    [result[@"other"] addObjectsFromArray:ssdResults[@"other"]];
+                } @catch (NSException *exception) {
                     continue;
                 }
-                NSMutableDictionary* outbound = [ConfigImporter ssOutboundFromSSLink:linkStr];
-                if (outbound) {
-                    [result[@"other"] addObject:outbound];
-                    continue;
-                }
-                NSMutableDictionary* ssdResults = [ConfigImporter importFromSubscriptionOfSSD:linkStr];
-                [result[@"other"] addObjectsFromArray:ssdResults[@"other"]];
             }
         }
         return result;
