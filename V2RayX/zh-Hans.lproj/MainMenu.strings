@@ -372,7 +372,7 @@
 "mK6-2p-4JG.title" = "Check Grammar With Spelling";
 
 /* Class = "NSMenuItem"; title = "Authorize v2rayx_sysconf..."; ObjectID = "mOc-zi-Beb"; */
-"mOc-zi-Beb.title" = "安装/重置V2ray插件...";
+"mOc-zi-Beb.title" = "安装/重置xray插件...";
 
 /* Class = "NSMenuItem"; title = "Ligatures"; ObjectID = "o6e-r0-MWq"; */
 "o6e-r0-MWq.title" = "Ligatures";
@@ -423,7 +423,7 @@
 "tlD-Oa-oAM.title" = "Kern";
 
 /* Class = "NSMenu"; title = "V2RayX"; ObjectID = "uQy-DD-JDr"; */
-"uQy-DD-JDr.title" = "V2RayX";
+"uQy-DD-JDr.title" = "V2RayXS";
 
 /* Class = "NSMenuItem"; title = "Cut"; ObjectID = "uRl-iY-unG"; */
 "uRl-iY-unG.title" = "Cut";
