@@ -347,7 +347,12 @@
     NSMutableDictionary* streamSettings = [newProfile.streamSettings mutableDeepCopy];
     switch (newProfile.network) {
         case tcp:
-            if (![sharedServer objectForKey:@"type"] || !([sharedServer[@"type"] isEqualToString:@"none"] || [sharedServer[@"type"] isEqualToString:@"http"])) {
+        {
+            NSString* sharedServerType = [sharedServer objectForKey:@"type"];
+            if(!sharedServerType || [sharedServerType isEqual:[NSNull null]]) {
+                break;
+            }
+            if (!([sharedServerType isEqualToString:@"none"] || [sharedServerType isEqualToString:@"http"])) {
                 break;
             }
             streamSettings[@"tcpSettings"][@"header"][@"type"] = sharedServer[@"type"];
@@ -357,7 +362,9 @@
                 }
             }
             break;
+        }
         case kcp:
+        {
             if (![sharedServer objectForKey:@"type"]) {
                 break;
             }
@@ -377,7 +384,9 @@
                 streamSettings[@"wsSettings"][@"headers"][@"Host"] = nilCoalescing([sharedServer objectForKey:@"host"], @"");
             }
             break;
+        }
         case http:
+        {
             if ([[sharedServer objectForKey:@"host"] containsString:@";"]) {
                 NSArray *tempPathHostArray = [[sharedServer objectForKey:@"host"] componentsSeparatedByString:@";"];
                 streamSettings[@"wsSettings"][@"path"] = tempPathHostArray[0];
@@ -393,8 +402,11 @@
                 }
             }
             break;
+        }
         default:
+        {
             break;
+        }
     }
     if ([sharedServer objectForKey:@"tls"] && [sharedServer[@"tls"] isEqualToString:@"tls"]) {
         streamSettings[@"security"] = @"tls";
