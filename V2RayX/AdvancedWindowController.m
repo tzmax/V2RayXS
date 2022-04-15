@@ -430,9 +430,9 @@
     [self.popover close];
     if (sender == _saveIPListButton) {
         self.routingRuleSets[_selectedRuleSet][@"rules"][_selectedRule][@"ip"] = [[_ipTextView string] componentsSeparatedByString:@"\n"];
-        NSLog(@"%@", self.routingRuleSets[_selectedRuleSet][@"rules"][_selectedRule][@"ip"]);
+        // NSLog(@"%@", self.routingRuleSets[_selectedRuleSet][@"rules"][_selectedRule][@"ip"]);
     } else {
-        self.routingRuleSets[_selectedRuleSet][@"rules"][_selectedRule][@"domain"] = [[_ipTextView string] componentsSeparatedByString:@"\n"];
+        self.routingRuleSets[_selectedRuleSet][@"rules"][_selectedRule][@"domain"] = [[_domainTextView string] componentsSeparatedByString:@"\n"];
     }
 }
 
