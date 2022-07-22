@@ -1001,7 +1001,7 @@ static AppDelegate *appDelegate;
     NSString* defaultV2ray = [NSString stringWithFormat:@"%@/xray", [[NSBundle mainBundle] resourcePath]];
     NSFileManager* fileManager = [NSFileManager defaultManager];
     NSString* cusV2ray = [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/xray-core/xray",NSHomeDirectory()];
-    for (NSString* binary in @[@"v2ray", @"v2ctl"]) {
+    for (NSString* binary in @[@"xray"]) {
         NSString* fullpath = [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/xray-core/%@",NSHomeDirectory(), binary];
         BOOL isDir = YES;
         if (![fileManager fileExistsAtPath:fullpath isDirectory:&isDir] || isDir || ![fileManager setAttributes:@{NSFilePosixPermissions: [NSNumber numberWithShort:0777]} ofItemAtPath:fullpath error:nil]) {
