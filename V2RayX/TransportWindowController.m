@@ -99,7 +99,7 @@
     [_quicHeaderButton selectItemAtIndex:searchInArray(streamSettings[@"quicSettings"][@"header"][@"type"], OBFU_LIST)];
     
     //tls
-    [_tlsUseButton setState:[[streamSettings objectForKey:@"security"] boolValue]];
+    [_tlsSecurityButton selectItemAtIndex:searchInArray(streamSettings[@"security"], TLS_SECURITY_LIST)];
     NSDictionary* tlsSettings = [streamSettings objectForKey:@"tlsSettings"];
     [_tlsAiButton setState:[tlsSettings[@"allowInsecure"] boolValue]];
     [_tlsAllowInsecureCiphersButton setState:[tlsSettings[@"allowInsecureCiphers"] boolValue]];
@@ -108,18 +108,16 @@
     [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"http/1.1")];
     [_tlsServerNameField setStringValue:streamSettings[@"tlsSettings"][@"serverName"]];
     
-    [self useTLS:nil];
+    //xtls
+    NSDictionary* xtlsSettings = [streamSettings objectForKey:@"xtlsSettings"];
+    [_tlsAiButton setState:[xtlsSettings[@"allowInsecure"] boolValue]];
+
     // mux
     [_muxEnableButton setState:[nilCoalescing(muxSettings[@"enabled"], @NO) boolValue]];
     [_muxConcurrencyField setIntegerValue:[nilCoalescing(muxSettings[@"concurrency"], @8) integerValue]];
     // tcp fast open
     NSDictionary* tfoSettings = [streamSettings objectForKey:@"sockopt"];
     [_tfoEnableButton setState:[tfoSettings[@"tcpFastOpen"] boolValue]];
-}
-
-- (IBAction)useTLS:(id)sender {
-    [_tlsAiButton setEnabled:[_tlsUseButton state]];
-    [_tlsAllowInsecureCiphersButton setEnabled:[_tlsUseButton state]];
 }
 
 - (IBAction)tReset:(id)sender {
@@ -220,12 +218,15 @@
                       @"type": [[self->_quicHeaderButton selectedItem] title]
                       }
               },
-      @"security": [self->_tlsUseButton state] ? @"tls" : @"none",
+      @"security": [[self->_tlsSecurityButton selectedItem] title],
       @"tlsSettings": @{
               @"serverName": [_tlsServerNameField stringValue],
               @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
               @"allowInsecureCiphers": [NSNumber numberWithBool:[self->_tlsAllowInsecureCiphersButton state]==1],
               @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
+              },
+      @"xtlsSettings": @{
+              @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1]
               },
       @"httpSettings": httpSettings
       };

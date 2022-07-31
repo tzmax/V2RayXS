@@ -9,12 +9,27 @@
 #import "AppDelegate.h"
 #import "utilities.h"
 
+typedef enum ProtocolType : NSUInteger {
+    vmess,
+    vless
+} ProtocolType;
+
 typedef enum SecurityType : NSUInteger {
-    auto_,
+    none_security,
+    auto_security,
     aes_128_gcm,
-    chacha20_poly130,
-    none
+    chacha20_poly130
 } SecurityType;
+
+typedef enum FlowType : NSUInteger {
+    none_flow,
+    xtls_rprx_direct,
+    xtls_rprx_direct_udp443,
+    xtls_rprx_origin,
+    xtls_rprx_origin_udp443,
+    xtls_rprx_splice,
+    xtls_rprx_splice_udp443
+} FlowType;
 
 typedef enum NetWorkType : NSUInteger {
     tcp,
@@ -25,21 +40,22 @@ typedef enum NetWorkType : NSUInteger {
 } NetWorkType;
 
 @interface ServerProfile : NSObject
-- (NSMutableDictionary*)outboundProfile;
-+ (ServerProfile* _Nullable )readFromAnOutboundDic:(NSDictionary*)outDict;
-+ (NSArray*)profilesFromJson:(NSDictionary*)outboundJson;
--(ServerProfile*)deepCopy;
+- (NSMutableDictionary* _Null_unspecified)outboundProfile;
++ (ServerProfile* _Nullable)readFromAnOutboundDic:(NSDictionary* _Null_unspecified)outDict;
++ (NSArray* _Null_unspecified)profilesFromJson:(NSDictionary* _Null_unspecified)outboundJson;
+-(ServerProfile* _Null_unspecified)deepCopy;
 
-@property (nonatomic) NSString* address;
-@property (nonatomic) NSString* protocol;
+@property (nonatomic) NSString* _Null_unspecified address;
+@property (nonatomic) ProtocolType protocol;
 @property (nonatomic) NSUInteger port;
-@property (nonatomic) NSString* userId;
+@property (nonatomic) NSString* _Null_unspecified userId;
 @property (nonatomic) NSUInteger alterId;
 @property (nonatomic) NSUInteger level;
-@property (nonatomic) NSString* outboundTag;
+@property (nonatomic) NSString* _Null_unspecified outboundTag;
+@property (nonatomic) FlowType flow;
 @property (nonatomic) SecurityType security;
 @property (nonatomic) NetWorkType network;
-@property (nonatomic) NSString* sendThrough;
-@property (nonatomic) NSDictionary* streamSettings; // except network type.
-@property (nonatomic) NSDictionary* muxSettings;
+@property (nonatomic) NSString* _Null_unspecified sendThrough;
+@property (nonatomic) NSDictionary* _Null_unspecified streamSettings; // except network type.
+@property (nonatomic) NSDictionary* _Null_unspecified muxSettings;
 @end

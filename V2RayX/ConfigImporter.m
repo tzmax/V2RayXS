@@ -455,7 +455,7 @@
 //    }
     
     ServerProfile* newProfile = [[ServerProfile alloc] init];
-    newProfile.protocol = @"vless";
+    newProfile.protocol = vless;
     newProfile.outboundTag = nilCoalescing([url fragment], @"VLESS");
     newProfile.address = nilCoalescing([url host], @"");
     newProfile.port = [nilCoalescing([url port], @0) intValue];
