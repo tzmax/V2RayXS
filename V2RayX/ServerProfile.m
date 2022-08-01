@@ -12,14 +12,15 @@
 - (ServerProfile*)init {
     self = [super init];
     if (self) {
-        [self setProtocol:@"vmess"];
+        [self setProtocol:vmess];
         [self setAddress:@"server.cc"];
         [self setPort:10086];
         [self setUserId:@"00000000-0000-0000-0000-000000000000"];
         [self setAlterId:64];
         [self setLevel:0];
         [self setOutboundTag:@"test server"];
-        [self setSecurity:auto_];
+        [self setFlow:none_flow];
+        [self setSecurity:none_security];
         [self setNetwork:tcp];
         [self setSendThrough:@"0.0.0.0"];
         [self setStreamSettings:@{
@@ -29,6 +30,9 @@
                                           @"alpn": @[@"http/1.1"],
                                           @"allowInsecure": [NSNumber numberWithBool:NO],
                                           @"allowInsecureCiphers": [NSNumber numberWithBool:NO]
+                                          },
+                                  @"xtlsSettings": @{
+                                          @"allowInsecure": [NSNumber numberWithBool:NO]
                                           },
                                   @"tcpSettings": @{
                                           @"header": @{
@@ -87,7 +91,7 @@
     }
     for (NSDictionary* vnext in [outboundJson valueForKeyPath:@"settings.vnext"]) {
         ServerProfile* profile = [[ServerProfile alloc] init];
-        profile.protocol = nilCoalescing(outboundJson[@"protocol"], @"vmess");
+        profile.protocol = searchInArray(outboundJson[@"protocol"], PROTOCOL_LIST);
         profile.address = nilCoalescing(vnext[@"address"], @"127.0.0.1");
         profile.outboundTag = nilCoalescing(outboundJson[@"tag"], @"");
         profile.port = [vnext[@"port"] unsignedIntegerValue];
@@ -97,6 +101,7 @@
         profile.userId = nilCoalescing(vnext[@"users"][0][@"id"], @"23ad6b10-8d1a-40f7-8ad0-e3e35cd38287");
         profile.alterId = [vnext[@"users"][0][@"alterId"] unsignedIntegerValue];
         profile.level = [vnext[@"users"][0][@"level"] unsignedIntegerValue];
+        profile.flow = searchInArray(vnext[@"users"][0][@"flow"], VLESS_FLOW_LIST);
         profile.security = searchInArray(vnext[@"users"][0][@"security"], VMESS_SECURITY_LIST);
         if (outboundJson[@"streamSettings"] != nil) {
             profile.streamSettings = outboundJson[@"streamSettings"];
@@ -122,13 +127,14 @@
 
 -(ServerProfile*)deepCopy {
     ServerProfile* aCopy = [[ServerProfile alloc] init];
-    aCopy.protocol = [NSString stringWithString:nilCoalescing(self.protocol, @"")];
+    aCopy.protocol = self.protocol;
     aCopy.address = [NSString stringWithString:nilCoalescing(self.address, @"")];
     aCopy.port = self.port;
     aCopy.userId = [NSString stringWithString:nilCoalescing(self.userId, @"")];
     aCopy.alterId = self.alterId;
     aCopy.level = self.level;
     aCopy.outboundTag = [NSString stringWithString:nilCoalescing(self.outboundTag, @"")];
+    aCopy.flow = self.flow;
     aCopy.security = self.security;
     aCopy.network = self.network;
     aCopy.sendThrough = [NSString stringWithString:nilCoalescing(self.sendThrough, @"")];
@@ -144,7 +150,7 @@
     @{
       @"sendThrough": sendThrough,
       @"tag": nilCoalescing(outboundTag, @""),
-      @"protocol": nilCoalescing(protocol, @"vmess"),
+      @"protocol": PROTOCOL_LIST[protocol],
       @"settings": [@{
               @"vnext": @[
                       @{
@@ -154,6 +160,7 @@
                                   @{
                                       @"id": userId != nil ? [userId stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]: @"",
                                       @"alterId": [NSNumber numberWithUnsignedInteger:alterId],
+                                      @"flow": VLESS_FLOW_LIST[flow],
                                       @"security": VMESS_SECURITY_LIST[security],
                                       @"level": [NSNumber numberWithUnsignedInteger:level],
                                       @"encryption": @"none"
@@ -181,6 +188,7 @@
 @synthesize alterId;
 @synthesize level;
 @synthesize outboundTag;
+@synthesize flow;
 @synthesize security;
 @synthesize network;
 @synthesize sendThrough;

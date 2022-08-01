@@ -45,7 +45,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 //tls fields
-@property (weak) IBOutlet NSButton *tlsUseButton;
+@property (weak) IBOutlet NSPopUpButton *tlsSecurityButton;
 @property (weak) IBOutlet NSButton *tlsAiButton;
 @property (weak) IBOutlet NSButton *tlsAllowInsecureCiphersButton;
 @property (weak) IBOutlet NSTextField *tlsAlpnField;
