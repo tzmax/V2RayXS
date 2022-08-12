@@ -772,7 +772,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = V2RayX/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
-				MARKETING_VERSION = 1.5.3;
+				MARKETING_VERSION = 1.5.4;
 				PRODUCT_BUNDLE_IDENTIFIER = cenmrev.V2RayXS;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -787,7 +787,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = V2RayX/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
-				MARKETING_VERSION = 1.5.3;
+				MARKETING_VERSION = 1.5.4;
 				PRODUCT_BUNDLE_IDENTIFIER = cenmrev.V2RayXS;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
