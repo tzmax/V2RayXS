@@ -363,7 +363,7 @@
 }
 
 - (IBAction)importFromMiscLinks:(id)sender {
-    [self askInputWithPrompt:@"V2RayX will try importing ssd://, vmess:// and http(s):// links from v2rayN and SSD(may cause failure)." handler:^(NSString *inputStr) {
+    [self askInputWithPrompt:@"V2RayXS will try importing ssd://, vmess:// and http(s):// links from v2rayN and SSD(may cause failure)." handler:^(NSString *inputStr) {
         inputStr = [inputStr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         if ([inputStr length] != 0) {
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
@@ -394,7 +394,7 @@
 
 
 - (IBAction)importFromVLESSLinks:(id)sender {
-    [self askInputWithPrompt:@"V2RayX will try importing vless:// links. analysis support By @tzmax" handler:^(NSString *inputStr) {
+    [self askInputWithPrompt:@"V2RayXS will try importing vless:// links. analysis support By @tzmax" handler:^(NSString *inputStr) {
         inputStr = [inputStr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         if ([inputStr length] != 0) {
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
