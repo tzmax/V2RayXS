@@ -23,15 +23,9 @@
 **READ THIS**: [XTLS? Xray? V2Ray?](https://xtls.github.io).
 
 **YOU SHOULD READ XTLS'S OFFICIAL INSTRUCTION BEFORE USING V2RAYXS!**
-## Download V2RayX
+## Download V2RayXS
 
-Download from [Releases](https://github.com/tzmax/V2RayXS/releases). (compiled by [travis-ci.org](https://travis-ci.org/tzmax/V2RayXS)).
-
-By [Homebrew-Cask](https://caskroom.github.io/).
-
-```sh
-brew cask install v2rayx
-```
+Download from [Releases](https://github.com/tzmax/V2RayXS/releases).
 
 ## How to build
 

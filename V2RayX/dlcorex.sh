@@ -37,12 +37,11 @@ if [ "$VERSION" != "$existingVersion" ]; then
     fi
     if [[ $getCore == 0 ]]; then
         echo "${RED}download failed!"
-        echo "Use whatever method you can think of, get xray-macos.zip of version ${VERSION} from xray.com, and put it in the folder 'Downloads' and try this script again."
-        echo "用你能想到任何办法，从 xray.com 下载好${VERSION}版本的 xray-macos.zip，放在“下载”文件夹里面，然后再次运行这个脚本。${NORMAL}"
+        echo "Use whatever method you can think of, get xray-macos.zip of version ${VERSION} from xtls.github.io, and put it in the folder 'Downloads' and try this script again."
+        echo "用你能想到任何办法，从 xtls.github.io 下载好${VERSION}版本的 xray-macos.zip，放在“下载”文件夹里面，然后再次运行这个脚本。${NORMAL}"
         exit 1
     fi
     chmod +x ./xray
-    chmod +x ./v2ctl
     rm -r xray-*
 else
     exit 0

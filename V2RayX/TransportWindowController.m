@@ -141,7 +141,7 @@
 }
 
 - (IBAction)transportHelp:(id)sender {
-    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://v2ray.com/chapter_02/05_transport.html"]];
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/config/transports/"]];
 }
 
 - (BOOL)checkInputs {

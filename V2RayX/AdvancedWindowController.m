@@ -515,13 +515,15 @@
     NSString* tabTitle = _mainTabView.selectedTabViewItem.label;
 //    NSLog(@"%@", _mainTabView.selectedTabViewItem.label);
     if ([@"Rules" isEqualToString:tabTitle]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://www.v2ray.com/chapter_02/03_routing.html"]];
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/document/level-1/routing-lv1-part1.html"]];
     } else if ([@"Outbounds" isEqualToString:tabTitle]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://www.v2ray.com/chapter_02/01_overview.html#outboundobject"]];
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/config/outbounds/"]];
     } else if ([@"Configs" isEqualToString:tabTitle]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://www.v2ray.com/chapter_02/01_overview.html"]];
-    } else if ([@"V2Ray Core" isEqualToString:tabTitle]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://www.v2ray.com/chapter_00/install.html#download"]];
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/config/"]];
+    } else if ([@"Core" isEqualToString:tabTitle]) {
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/document/install.html"]];
+    } else {
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/tzmax/V2RayXS#readme"]];
     }
 }
 
