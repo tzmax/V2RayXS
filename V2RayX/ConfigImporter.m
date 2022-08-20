@@ -460,6 +460,7 @@
     newProfile.address = nilCoalescing([url host], @"");
     newProfile.port = [nilCoalescing([url port], @0) intValue];
     newProfile.userId = nilCoalescing([url user], newProfile.userId);
+    
 //    newProfile.alterId = [nilCoalescing([sharedServer objectForKey:@"aid"], @0) intValue];
     NSDictionary *netWorkDict = @{@"tcp": @0, @"kcp": @1, @"ws":@2, @"h2":@3 };
  
@@ -518,10 +519,36 @@
         default:
             break;
     }
-    if ([sharedServer objectForKey:@"tls"] && [sharedServer[@"tls"] isEqualToString:@"tls"]) {
-        streamSettings[@"security"] = @"tls";
-        streamSettings[@"tlsSettings"][@"serverName"] = newProfile.address;
+    
+    
+    // NSLog(@"sharedServer %@", sharedServer);
+    // VMESS_SECURITY_LIST is encryption fields
+    if ([sharedServer objectForKey:@"encryption"] && [VMESS_SECURITY_LIST containsObject: [sharedServer objectForKey:@"encryption"]]) {
+        newProfile.security = searchInArray(nilCoalescing([sharedServer objectForKey:@"encryption"], @""), VMESS_SECURITY_LIST);
+    } else {
+        newProfile.security = searchInArray(@"auto", VMESS_SECURITY_LIST);
     }
+    
+    if ([sharedServer objectForKey:@"security"] && [TLS_SECURITY_LIST containsObject: [sharedServer objectForKey:@"security"]]) {
+        streamSettings[@"security"] = nilCoalescing(sharedServer[@"security"], @"none");
+        NSString* settingsName = @"";
+        if ([sharedServer[@"security"] isEqualToString:@"tls"]) {
+            settingsName = @"tlsSettings";
+        }
+        
+        if ([sharedServer[@"security"] isEqualToString:@"xtls"] && [sharedServer objectForKey:@"flow"]) {
+            newProfile.flow = searchInArray(nilCoalescing(sharedServer[@"flow"], @""), VLESS_FLOW_LIST);
+            settingsName = @"xtlsSettings";
+        }
+        
+        if ([settingsName isNotEqualTo:@""]) {
+            streamSettings[settingsName][@"serverName"] = nilCoalescing(sharedServer[@"sni"], newProfile.address);
+            if ([sharedServer objectForKey:@"alpn"]) {
+                streamSettings[settingsName][@"alpn"] = [sharedServer[@"alpn"] stringByRemovingPercentEncoding];
+            }
+        }
+    }
+    
     newProfile.streamSettings = streamSettings;
     return newProfile;
 }

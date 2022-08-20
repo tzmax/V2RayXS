@@ -110,7 +110,13 @@
     
     //xtls
     NSDictionary* xtlsSettings = [streamSettings objectForKey:@"xtlsSettings"];
-    [_tlsAiButton setState:[xtlsSettings[@"allowInsecure"] boolValue]];
+    if ([streamSettings[@"security"] isEqualToString: @"xtls"]) {
+        [_tlsAiButton setState:[xtlsSettings[@"allowInsecure"] boolValue]];
+        alpnArray = streamSettings[@"xtlsSettings"][@"alpn"];
+        alpnString = [alpnArray componentsJoinedByString:@","];
+        [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"http/1.1")];
+        [_tlsServerNameField setStringValue:streamSettings[@"xtlsSettings"][@"serverName"]];
+    }
 
     // mux
     [_muxEnableButton setState:[nilCoalescing(muxSettings[@"enabled"], @NO) boolValue]];
@@ -226,7 +232,9 @@
               @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
               },
       @"xtlsSettings": @{
-              @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1]
+              @"serverName": [_tlsServerNameField stringValue],
+              @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
+              @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
               },
       @"httpSettings": httpSettings
       };
