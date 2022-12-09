@@ -462,7 +462,7 @@
     newProfile.userId = nilCoalescing([url user], newProfile.userId);
     
 //    newProfile.alterId = [nilCoalescing([sharedServer objectForKey:@"aid"], @0) intValue];
-    NSDictionary *netWorkDict = @{@"tcp": @0, @"kcp": @1, @"ws":@2, @"h2":@3 };
+    NSDictionary *netWorkDict = @{@"tcp": @0, @"kcp": @1, @"ws":@2, @"http":@3, @"quic":@4, @"grpc":@5 };
  
     if ([sharedServer objectForKey:@"type"] && [netWorkDict objectForKey:[sharedServer objectForKey:@"type"]]) {
         newProfile.network = [netWorkDict[sharedServer[@"type"]] intValue];
@@ -514,6 +514,21 @@
                 if ([[sharedServer objectForKey:@"host"] length] > 0) {
                     streamSettings[@"httpSettings"][@"host"] = [[sharedServer objectForKey:@"host"] componentsSeparatedByString:@","];
                 }
+            }
+            break;
+        case quic:
+            streamSettings[@"quicSettings"][@"headerType"] = nilCoalescing([sharedServer objectForKey:@"headerType"], @"");
+            streamSettings[@"quicSettings"][@"quicSecurity"] = nilCoalescing([sharedServer objectForKey:@"quicSecurity"], @"none");
+            if ([sharedServer objectForKey:@"quicSecurity"]) {
+                streamSettings[@"quicSettings"][@"key"] = nilCoalescing([[sharedServer objectForKey:@"key"] stringByRemovingPercentEncoding], @"");
+            }
+            break;
+        case grpc:
+            streamSettings[@"grpcSettings"][@"serviceName"] = nilCoalescing([sharedServer objectForKey:@"serviceName"], @"");
+            if ([[sharedServer objectForKey:@"mode"] containsString:@"multi"]) {
+                streamSettings[@"grpcSettings"][@"multiMode"] = @YES;
+            } else {
+                streamSettings[@"grpcSettings"][@"multiMode"] = @NO;
             }
             break;
         default:
