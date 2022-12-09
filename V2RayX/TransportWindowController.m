@@ -121,6 +121,11 @@
     // mux
     [_muxEnableButton setState:[nilCoalescing(muxSettings[@"enabled"], @NO) boolValue]];
     [_muxConcurrencyField setIntegerValue:[nilCoalescing(muxSettings[@"concurrency"], @8) integerValue]];
+    
+    // grpc
+    [_grpcServiceNameField setStringValue:nilCoalescing(streamSettings[@"grpcSettings"][@"serviceName"], @"")];
+    [_grpcMultiMode setState:[nilCoalescing(streamSettings[@"grpcSettings"][@"multiMode"], @NO) boolValue]];
+    
     // tcp fast open
     NSDictionary* tfoSettings = [streamSettings objectForKey:@"sockopt"];
     [_tfoEnableButton setState:[tfoSettings[@"tcpFastOpen"] boolValue]];
@@ -235,6 +240,10 @@
               @"serverName": [_tlsServerNameField stringValue],
               @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
               @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
+              },
+      @"grpcSettings": @{
+              @"serviceName": [[_grpcServiceNameField stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]],
+              @"multiMode":[NSNumber numberWithBool:[self->_grpcMultiMode indexOfSelectedItem] != 0],
               },
       @"httpSettings": httpSettings
       };

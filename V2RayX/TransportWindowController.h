@@ -58,6 +58,11 @@ NS_ASSUME_NONNULL_BEGIN
 //tcp fast open
 @property (weak) IBOutlet NSButton *tfoEnableButton;
 
+// grpc fields
+@property (weak) IBOutlet NSTextField *grpcServiceNameField;
+@property (weak) IBOutlet NSPopUpButton *grpcMultiMode;
+
+
 @end
 
 NS_ASSUME_NONNULL_END

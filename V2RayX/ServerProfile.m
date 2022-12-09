@@ -66,6 +66,9 @@
                                           @"key": @"",
                                           @"header": @{ @"type": @"none" }
                                           },
+                                  @"grpcSettings": @{
+                                          @"multiMode": [NSNumber numberWithBool:NO],
+                                          },
                                   @"sockopt": @{}
                                   }];
         [self setMuxSettings:@{

@@ -36,7 +36,8 @@ typedef enum NetWorkType : NSUInteger {
     kcp,
     ws,
     http,
-    quic
+    quic,
+    grpc
 } NetWorkType;
 
 @interface ServerProfile : NSObject
