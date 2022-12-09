@@ -300,7 +300,7 @@ static AppDelegate *appDelegate;
 }
 
 - (IBAction)openReleasePage:(id)sender {
-    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/TZmax/V2RayXS/releases/latest"]];
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/tzmax/V2RayXS/releases/latest"]];
 }
 
 - (IBAction)checkUpgrade:(id)sender {

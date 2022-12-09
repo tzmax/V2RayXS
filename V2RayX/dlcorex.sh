@@ -5,16 +5,21 @@ BOLD='\033[1m'
 NORMAL='\033[0m'
 
 cd "$SRCROOT"
-output="v0"
-if [[ -f ./xray-core-bin/xray ]]; then
+output="v${VERSION}"
+if [[ -f ./xray-core-bin/xray ]] || [ "$1" == "" ]; then
     output=$(./xray-core-bin/xray --version)
 fi
 existingVersion=${output:5:${#VERSION}}
-if [ "$VERSION" != "$existingVersion" ]; then
+osArch=$(uname -m)
+if [[ "$VERSION" != "$existingVersion" ]] || [ "$1" != "" ]; then
     getCore=0
     mkdir -p xray-core-bin
     cd xray-core-bin
-    curl -s -L -o xray-macos.zip https://github.com/XTLS/Xray-core/releases/download/v${VERSION}/Xray-macos-64.zip
+    osArchName="64" # intel
+    if [[ "$osArch" != "x86_64" ]] || [ "$1" == "arm64" ]; then
+        osArchName="arm64-v8a" # m1
+    fi
+    curl -s -L -o xray-macos.zip https://github.com/XTLS/Xray-core/releases/download/v${VERSION}/Xray-macos-${osArchName}.zip
     if [[ $? == 0 ]]; then
         unzip -o xray-macos.zip
         getCore=1
