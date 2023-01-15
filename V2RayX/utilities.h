@@ -15,7 +15,7 @@
 #define ROUTING_NETWORK_LIST (@[@"tcp", @"udp", @"tcp,udp"])
 
 #define OBFU_LIST (@[@"none", @"srtp", @"utp", @"wechat-video", @"dtls", @"wireguard"])
-#define VLESS_FLOW_LIST (@[@"", @"xtls-rprx-direct", @"xtls-rprx-direct-udp443", @"xtls-rprx-origin", @"xtls-rprx-origin-udp443", @"xtls-rprx-splice", @"xtls-rprx-splice-udp443"])
+#define VLESS_FLOW_LIST (@[@"", @"xtls-rprx-direct", @"xtls-rprx-direct-udp443", @"xtls-rprx-origin", @"xtls-rprx-origin-udp443", @"xtls-rprx-splice", @"xtls-rprx-splice-udp443", @"xtls-rprx-vision", @"xtls-rprx-vision-udp443"])
 #define VMESS_SECURITY_LIST (@[@"none", @"auto", @"aes-128-gcm", @"chacha20-poly1305"])
 #define NETWORK_LIST (@[@"tcp", @"kcp", @"ws", @"http", @"quic", @"grpc"])
 #define QUIC_SECURITY_LIST (@[@"none", @"aes-128-gcm", @"chacha20-poly1305"])

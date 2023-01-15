@@ -10,8 +10,10 @@
 
 @interface ConfigWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate>
 - (IBAction)chooseNetwork:(NSPopUpButton *)sender;
+@property (weak) IBOutlet NSPopUpButton *protocolButton;
 @property (weak) IBOutlet NSPopUpButton *networkButton;
 @property (weak) IBOutlet NSPopUpButton *vmessSecurityButton;
+@property (weak) IBOutlet NSPopUpButtonCell *vlessFlowButton;
 - (IBAction)addRemoveServer:(id)sender;
 - (IBAction)cancel:(id)sender;
 - (IBAction)okSave:(id)sender;

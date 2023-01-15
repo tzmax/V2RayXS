@@ -47,6 +47,10 @@
         
     });
     
+    [_protocolButton removeAllItems];
+    for(NSString* protocol in PROTOCOL_LIST) {
+        [_protocolButton addItemWithTitle:protocol];
+    }
     [_networkButton removeAllItems];
     for(NSString* network in NETWORK_LIST) {
         [_networkButton addItemWithTitle:network];
@@ -54,6 +58,10 @@
     [_vmessSecurityButton removeAllItems];
     for(NSString* security in VMESS_SECURITY_LIST) {
         [_vmessSecurityButton addItemWithTitle:security];
+    }
+    [_vlessFlowButton removeAllItems];
+    for(NSString* flow in VLESS_FLOW_LIST) {
+        [_vlessFlowButton addItemWithTitle:flow];
     }
     
     //set textField Display
@@ -72,12 +80,15 @@
     
     for (NSDictionary *p in _appDelegate.profiles) {
         // this old conditions is [@"vmess" isEqualToString:p[@"protocol"]] && [p[@"settings"][@"vnext"] count] == 1
+        NSLog(@"protocol: %@", p[@"protocol"]);
         if (([@"vmess" isEqualToString:p[@"protocol"]] || [@"vless" isEqualToString:p[@"protocol"]]) && [p[@"settings"][@"vnext"] count] == 1) {
             [_profiles addObject:[ServerProfile profilesFromJson:p][0]];
         } else {
             [_outbounds addObject:p];
         }
     }
+    // NSLog(@"_profiles: %@", _profiles);
+    
     _cusProfiles = [_appDelegate.cusProfiles mutableDeepCopy];
     _subscriptions = [_appDelegate.subscriptions mutableCopy];
     
@@ -110,7 +121,7 @@
 // set controller as profilesTable's datasource
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
     if (tableView == _profileTable) {
-        return [_profiles count];
+        return _profiles.count;
     }
     return 0;
 }
@@ -118,8 +129,15 @@
 - (id) tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
     if (tableView == _profileTable) {
         if ([_profiles count] > 0) {
-            ServerProfile* p = [_profiles objectAtIndex:row];
-            return [[p outboundTag] length] > 0 ? [p outboundTag] : [NSString stringWithFormat:@"%@:%ld", [p address], [p port]];
+            NSDictionary *item = _profiles[row];
+            if ([item.className  isEqual: @"ServerProfile"]) {
+                ServerProfile *p = (ServerProfile*) item;
+                return [[p outboundTag] length] > 0 ? [p outboundTag] : [NSString stringWithFormat:@"%@:%ld", [p address], [p port]];
+            } else if([item objectForKey:@"tag"]){
+                return item[@"tag"];
+            }
+            
+            return nil;
         } else {
             return nil;
         }
@@ -132,7 +150,11 @@
         if ([_profiles count] > 0) {
             [self setSelectedServerIndex:[_profileTable selectedRow]];
 //            NSLog(@"selectef p =  %@", _profiles[_selectedServerIndex]);
-            [self setSelectedProfile:_profiles[_selectedServerIndex]];
+            NSDictionary *item = _profiles[_selectedServerIndex];
+            if ([item.className  isEqual: @"ServerProfile"]) {
+                [self setSelectedProfile:(ServerProfile*) item];
+            }
+            
         }
     }
 }
