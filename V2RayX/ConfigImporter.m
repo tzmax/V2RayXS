@@ -21,7 +21,10 @@
     @try {
         NSData* decodedData = [[NSData alloc] initWithBase64EncodedString:fixed options:NSDataBase64DecodingIgnoreUnknownCharacters];
         NSString* decodedString = [[NSString alloc] initWithData:decodedData encoding:NSUTF8StringEncoding];
-        assert(decodedString != nil);
+        // assert(decodedString != nil);
+        if (decodedString == nil) {
+            return @"";
+        }
         return decodedString;
     } @catch (NSException *exception) {
         return @"";
