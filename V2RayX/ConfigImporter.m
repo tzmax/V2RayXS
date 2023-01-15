@@ -57,7 +57,7 @@
                      @"server_port":port,
                      @"password": [methodAndPassword componentsJoinedByString:@":"],
                      @"method":method,
-                     @"tag":hashTagSeperatedParts[1]
+                     @"tag": [hashTagSeperatedParts[1] stringByRemovingPercentEncoding]
                      };
         }
     } @catch (NSException *exception) {
@@ -67,7 +67,7 @@
 
 
 + (NSDictionary*)parseStandardSSLink:(NSString*)link {
-    //https://shadowsocks.org/en/spec/SIP002-URI-Scheme.html
+    // https://shadowsocks.org/guide/sip002.html
     if (![@"ss://" isEqualToString: [link substringToIndex:5]]) {
         return nil;
     }
@@ -89,7 +89,7 @@
                      @"server_port":ssurl.port,
                      @"password": userinfo[1],
                      @"method":userinfo[0],
-                     @"tag":ssurl.fragment
+                     @"tag": [ssurl.fragment stringByRemovingPercentEncoding]
                      };
         } else {
             return @{
@@ -97,7 +97,7 @@
                      @"server_port":ssurl.port,
                      @"password": userinfo[1],
                      @"method":userinfo[0],
-                     @"tag":ssurl.fragment,
+                     @"tag":[ssurl.fragment stringByRemovingPercentEncoding],
                      @"ota":enableOTA
                      };
         }
@@ -456,10 +456,10 @@
     
     ServerProfile* newProfile = [[ServerProfile alloc] init];
     newProfile.protocol = vless;
-    newProfile.outboundTag = nilCoalescing([url fragment], @"VLESS");
     newProfile.address = nilCoalescing([url host], @"");
     newProfile.port = [nilCoalescing([url port], @0) intValue];
     newProfile.userId = nilCoalescing([url user], newProfile.userId);
+    newProfile.outboundTag = nilCoalescing([url.fragment stringByRemovingPercentEncoding], @"VLESS");
     
 //    newProfile.alterId = [nilCoalescing([sharedServer objectForKey:@"aid"], @0) intValue];
     NSDictionary *netWorkDict = @{@"tcp": @0, @"kcp": @1, @"ws":@2, @"http":@3, @"quic":@4, @"grpc":@5 };
