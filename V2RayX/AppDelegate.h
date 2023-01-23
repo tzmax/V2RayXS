@@ -17,7 +17,8 @@
 typedef enum ProxyMode : NSInteger{
     pacMode,
     globalMode,
-    manualMode
+    manualMode,
+    tunMode
 } ProxyMode;
 
 
@@ -91,6 +92,7 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 @property (weak) IBOutlet NSMenu *ruleSetMenuList;
 @property (weak, nonatomic) IBOutlet NSMenuItem *globalModeItem;
 @property (weak) IBOutlet NSMenuItem *manualModeItem;
+@property (weak) IBOutlet NSMenuItem *tunModeItem;
 @property (weak, nonatomic) IBOutlet NSMenuItem *serversItem;
 @property (weak, nonatomic) IBOutlet NSMenu *serverListMenu;
 @property (weak, nonatomic) IBOutlet NSMenu *pacListMenu;

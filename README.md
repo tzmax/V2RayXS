@@ -8,21 +8,50 @@
 
 > This repo is based on the [Cenmrev/V2RayX](https://github.com/Cenmrev/V2RayX) project for maintenance and update, uses the [Xray-core](https://github.com/XTLS/Xray-core) implementation to support the VLESS and XTLS protocol, and the copyright of the application belongs to the original author [@Contents](https://github.com/Cenmrev). Pay tribute to [@Contents](https://github.com/Cenmrev), Thanks to the [@XTLS](https://github.com/XTLS) community and all contributors
 
-
-## What is V2Ray?
-
-**READ THIS**: [Project V2Ray](http://www.v2ray.com).
-
-**YOU SHOULD READ V2RAY'S OFFICIAL INSTRUCTION BEFORE USING V2RAYX!**
-
-> ~~Other V2Ray clients on macOS: [V2RayU](https://github.com/yanue/v2rayu).
-(Not related to or endorsed by authors of this repo. USE AT YOUR OWN RISK. The project may have failed.)~~
-
 ## What is XTLS? Xray?
 
 **READ THIS**: [XTLS? Xray? V2Ray?](https://xtls.github.io).
 
 **YOU SHOULD READ XTLS'S OFFICIAL INSTRUCTION BEFORE USING V2RAYXS!**
+
+## What is Tun Mode? (Experimental)
+
+**Warn**: You must read this part of the document before using tun mode.
+
+First of all, please note that this function is an experimental function and is still under development and design. Due to the particularity of the tun mode, I hope you can use it after fully understanding it.
+
+This mode adopts the tun2socks method to forward all traffic, realizes the creation of a utun virtual network card device, and transmits the traffic of the tun device to your server through the socks5 proxy, and then the application sets up the routing table, and sets the default gateway to this tun device (please Note that this step may cause the default gateway routing settings of your device to be damaged. Although I have done a backup and repair process in the application, I cannot guarantee that it will be effective on all devices, please use it with caution!)
+
+Finally, if you are interested in this technology, you can also try to contact me or submit a PR to help me improve this function. If you can recommend this software to friends or post a blog and be able to link this project in other post replies, I will Very happy 😋, thank you for your attention and contribution (Welcome to contribute documents in other languages)
+
+1. Please understand what transparent proxy is, if PAC mode and global mode can meet your needs, please try to use it
+
+2. You have a certain understanding of the computer network and can solve the network problem of your device independently
+
+### Have you encountered a problem?
+
+Q: After using tun mode, the device is disconnected from the network? (recommended reference this page [What is a transparent proxy?](https://xtls.github.io/Xray-docs-next/document/level-2/transparent_proxy/transparent_proxy.html))
+
+A: It may be that the route of the default gateway is broken. You can check your routing table by executing the `netstat -r` command through the device terminal. Normally, there will be a `default` route, as follows
+
+```
+tzmaxdeMacBookPro: tzmax$ netstat -r
+Routing tables
+
+Internet:
+Destination        Gateway            Flags           Netif Expire
+default            192.168.1.1        UGScg             en0       
+127                localhost          UCS               lo0       
+localhost          localhost          UH                lo0    
+………
+```
+
+Q: Which tun device does the V2RayXS create?
+
+A: The name of the tun device on macos will be determined by the system, but the tun device created by V2RayXS will be bound to the `10.0.0.0` network segment by default, which can be used as a reference to find
+
+for more questions, you can also check issues first, and submit issues if you do not find a solution.
+
 ## Download V2RayXS
 
 Download from [Releases](https://github.com/tzmax/V2RayXS/releases).
@@ -80,6 +109,8 @@ So, to totally uninstall V2RayXS, just delete V2RayXS.app and the files above. :
 
 ## Acknowledge
 
+This repo is based on the [Cenmrev/V2RayX](https://github.com/Cenmrev/V2RayX) project for maintenance and update.
+
 V2RayXS uses [GCDWebServer](https://github.com/swisspol/GCDWebServer) to provide a local pac server. V2RayXS also uses many ideas and codes from [ShadowsocksX](https://github.com/shadowsocks/shadowsocks-iOS/tree/master), especially, the codes of [v2rays_sysconfig](https://github.com/tzmax/V2RayXS/blob/master/v2rayx_sysconf/main.m) are simply copied from [shadowsocks_sysconf](https://github.com/shadowsocks/shadowsocks-iOS/blob/master/shadowsocks_sysconf/main.m) with some modifications.
 
 ## Donation
@@ -88,7 +119,7 @@ If Project V2Ray or V2RayX (V2RayXS) helped you, you can also help us by donatio
 
 To donate to Project V2Ray, you may refer to [this page](https://www.v2ray.com/chapter_00/02_donate.html).
 
- To donate to Project Xray, you may refer to [this page](https://xtls.github.io/#%E5%B8%AE%E5%8A%A9-xray-%E5%8F%98%E5%BE%97%E6%9B%B4%E5%BC%BA).
+To donate to Project Xray, you may refer to [this page](https://xtls.github.io/#%E5%B8%AE%E5%8A%A9-xray-%E5%8F%98%E5%BE%97%E6%9B%B4%E5%BC%BA).
 
 ## Disclaimer
 

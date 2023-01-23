@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<document type="com.apple.InterfaceBuilder3.Cocoa.XIB" version="3.0" toolsVersion="19455" targetRuntime="MacOSX.Cocoa" propertyAccessControl="none" useAutolayout="YES" customObjectInstantitationMethod="direct">
+<document type="com.apple.InterfaceBuilder3.Cocoa.XIB" version="3.0" toolsVersion="20037" targetRuntime="MacOSX.Cocoa" propertyAccessControl="none" useAutolayout="YES" customObjectInstantitationMethod="direct">
     <dependencies>
         <deployment identifier="macosx"/>
-        <plugIn identifier="com.apple.InterfaceBuilder.CocoaPlugin" version="19455"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.CocoaPlugin" version="20037"/>
     </dependencies>
     <objects>
         <customObject id="-2" userLabel="File's Owner" customClass="NSApplication">
@@ -25,6 +25,7 @@
                 <outlet property="serverListMenu" destination="eqU-gH-G4L" id="unc-2a-DIW"/>
                 <outlet property="serversItem" destination="3wi-Co-2Kd" id="kKi-8l-dDJ"/>
                 <outlet property="statusBarMenu" destination="yZm-2L-r3v" id="3iW-vb-TOn"/>
+                <outlet property="tunModeItem" destination="gq6-eP-9LN" id="HZ7-H4-bcd"/>
                 <outlet property="updateServerItem" destination="C3a-eC-bFQ" id="3kY-g6-FNX"/>
                 <outlet property="upgradeMenuItem" destination="29h-Cl-9kt" id="Fk0-Xq-OK0"/>
                 <outlet property="v2rayRulesItem" destination="bUi-AV-IfA" id="p4V-ny-gh7"/>
@@ -708,7 +709,7 @@
                 <menuItem isSeparatorItem="YES" id="Zce-eo-WsH"/>
                 <menuItem title="PAC Mode" id="Cm9-3e-L2z">
                     <modifierMask key="keyEquivalentModifierMask"/>
-                    <menu key="submenu" title="pac file" id="yno-KX-HOj"/>
+                    <menu key="submenu" title="PAC Mode" id="yno-KX-HOj"/>
                     <connections>
                         <action selector="didChangeMode:" target="Voe-Tx-rLC" id="1eE-WI-EUp"/>
                     </connections>
@@ -723,6 +724,12 @@
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <connections>
                         <action selector="didChangeMode:" target="Voe-Tx-rLC" id="jH0-sn-1XU"/>
+                    </connections>
+                </menuItem>
+                <menuItem title="TUN Mode" id="gq6-eP-9LN">
+                    <modifierMask key="keyEquivalentModifierMask"/>
+                    <connections>
+                        <action selector="didChangeMode:" target="Voe-Tx-rLC" id="5Ne-Yc-IKo"/>
                     </connections>
                 </menuItem>
                 <menuItem isSeparatorItem="YES" id="A8t-NG-v92"/>

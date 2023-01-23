@@ -7,12 +7,71 @@
 
 #import <Foundation/Foundation.h>
 #import <SystemConfiguration/SystemConfiguration.h>
+#import <sys/signal.h>
+#import <Tun2socks/Tun2socks.h>
 #import "sysconf_version.h"
+#import "tun.h"
+#import "route.h"
+
 
 #define INFO "v2rayx_sysconf\n the helper tool for V2RayX, modified from clowwindy's shadowsocks_sysconf.\nusage: v2rayx_sysconf [options]\noff\t turn off proxy\nauto\t auto proxy change\nglobal port \t global proxy at the specified port number\n"
 
+//@interface AppDelegate : NSObject<NSXPCListenerDelegate> {}
+//@end
+//
+//@implementation AppDelegate
+//-(BOOL) listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)newConnection {
+//    if (newConnection != NULL) {
+//        [newConnection resume];
+//    }
+//
+//    return true;
+//}
+//
+//@end
+
+BOOL runLoopMark = YES;
+
+NSString* defaultRouteGateway;
+
+SYSRouteHelper* routeHelper;
+NSString* tunAddr = @"10.0.0.0";
+NSString* tunWg = @"10.0.0.1";
+NSString* tunMask = @"255.255.255.0";
+NSString* tunDns = @"8.8.8.8,8.8.4.4,1.1.1.1";
+NSString* proxyServer;
+NSString* exampleServer = @"93.184.216.34"; // example.com ip use to identify records
+
+// helper perform the cleanup task.
+void cleanupHandle(int signal_ns) {
+    // printf("app kill signal %d\n", signal_ns);
+    
+    // Restore the default route
+    if (![defaultRouteGateway isEqualToString:@""] && routeHelper != NULL) {
+        [routeHelper routeDelete:@"default" gateway:tunWg];
+        [routeHelper routeAdd:@"default" gateway:defaultRouteGateway];
+        [routeHelper routeDelete:proxyServer gateway:defaultRouteGateway];
+        printf("reset DefaultRouteGateway %s\n", [defaultRouteGateway UTF8String]);
+    }
+    
+    runLoopMark = NO;
+}
+
 int main(int argc, const char * argv[])
 {
+    // prepare for XPC communication
+//    AppDelegate* appDelegate = [AppDelegate init];
+//    NSXPCListener* xpcListener = [NSXPCListener serviceListener];
+//    xpcListener.delegate = appDelegate;
+    
+    // Initialize the routing controller
+    routeHelper = [[SYSRouteHelper alloc] init];
+
+    // app kill signal
+    signal(SIGKILL, cleanupHandle);
+    signal(SIGABRT, cleanupHandle);
+    signal(SIGINT, cleanupHandle);
+    
     if (argc < 2 || argc >4) {
         printf(INFO);
         return 1;
@@ -20,7 +79,7 @@ int main(int argc, const char * argv[])
     @autoreleasepool {
         NSString *mode = [NSString stringWithUTF8String:argv[1]];
         
-        NSSet *support_args = [NSSet setWithObjects:@"off", @"auto", @"global", @"save", @"restore", @"-v", nil];
+        NSSet *support_args = [NSSet setWithObjects:@"off", @"auto", @"global", @"save", @"restore", @"tun", @"-v", nil];
         if (![support_args containsObject:mode]) {
             printf(INFO);
             return 1;
@@ -31,6 +90,102 @@ int main(int argc, const char * argv[])
             return 0;
         }
         
+        if ([mode isEqualToString:@"tun"]) {
+            
+            proxyServer = exampleServer; // Just avoid empty abnormalities
+            if (argv[2] != NULL) {
+                NSString* server = [NSString stringWithUTF8String:argv[2]];
+                if (server != NULL) {
+                    proxyServer = server;
+                }
+            }
+            
+            int localProxyPort = 0;
+            if (sscanf (argv[3], "%i", &localProxyPort) != 1 || localProxyPort > 65535 || localProxyPort < 0) {
+                printf("error - not a valid port number\n");
+                return 0;
+            }
+            NSString* socks5ProxyLink = [[NSString alloc] initWithFormat: @"socks5://127.0.0.1:%i", localProxyPort];
+            
+            // The native way of creating TUN is deprecated
+            // int fd = createTUN();
+            // printf("tun fd is %d\n", fd);
+            
+            NSError* err;
+            Tun2socksTun2socksCtl* ctl = Tun2socksCreateTunConnect(tunAddr, tunWg, tunMask, tunDns, socks5ProxyLink, true, &err);
+            if (err != NULL) {
+                NSLog(@"Tun2socksConnect error:  %@\n", err);
+                return 0;
+            }
+            
+            if (ctl != NULL && ctl.tunName != NULL) {
+                // NSLog(@"tun fd is %@\n", ctl.tunName);
+                
+                // Process route
+                NSString* systemRouteBackupFilePath = [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_route_backup.plist", NSHomeDirectory()];
+                NSMutableDictionary* systemRouteBackup = [NSMutableDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath: systemRouteBackupFilePath]];
+                NSString* DEFAULT_ROUTE_GATEWAY = @"DefaultRouteGateway";
+                if (systemRouteBackup == NULL) {
+                    systemRouteBackup = [[NSMutableDictionary alloc] init];
+                }
+                if (![systemRouteBackup objectForKey:DEFAULT_ROUTE_GATEWAY]) {
+                    [systemRouteBackup setValue:@"" forKey:DEFAULT_ROUTE_GATEWAY];
+                }
+                
+                NSString* defGateway = [routeHelper getDefaultRouteGateway];
+                NSString* fixGateway = systemRouteBackup[DEFAULT_ROUTE_GATEWAY];
+                // NSString* fixGateway = [routeHelper getRouteGateway: exampleServer];
+            
+                // printf("defGateway %s\n", [defGateway UTF8String]);
+                // printf("fixGateway %s\n", [fixGateway UTF8String]);
+                
+                if ([defGateway isEqualToString:@""] && ![fixGateway isEqualToString:@""]) {
+                    defGateway = fixGateway;
+                }
+                
+                if(![defGateway isEqualToString:@""] && ([fixGateway isEqualToString:@""] || ![defGateway isEqualToString:fixGateway])) {
+                    fixGateway = defGateway;
+                    [systemRouteBackup setValue:fixGateway forKey:DEFAULT_ROUTE_GATEWAY];
+                    [systemRouteBackup writeToURL:[NSURL fileURLWithPath: systemRouteBackupFilePath] atomically:NO];
+                }
+                
+//                if(![defGateway isEqualToString:@""] && [fixGateway isEqualToString:@""]) {
+//                    printf("add fix defGateway %s\n", [defGateway UTF8String]);
+//                    [routeHelper routeAdd:exampleServer gateway:defGateway];
+//                }
+//                if (![defGateway isEqualToString:@""] && ![defGateway isEqualToString:fixGateway]) {
+//                    [routeHelper routeDelete:exampleServer gateway:defGateway];
+//                    [routeHelper routeAdd:exampleServer gateway:defGateway];
+//                }
+                
+                defaultRouteGateway = defGateway;
+                
+                [routeHelper upInterface: ctl.tunName]; // up tun Interface
+                
+                if (![defaultRouteGateway isEqualToString:@""]) {
+                    [routeHelper routeDelete:@"default" gateway:defaultRouteGateway];
+                    [routeHelper routeAdd:proxyServer gateway:defaultRouteGateway];
+                }
+                
+                [routeHelper routeAdd:@"default" gateway:tunWg];
+            }
+
+            // run loop
+            CFRunLoopSourceContext context = {0};
+            CFRunLoopSourceRef source = CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &context);
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopDefaultMode);
+            CFRelease(source);
+            while (runLoopMark) {
+                SInt32 result = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0e10, true);
+                if (result == kCFRunLoopRunFinished) {
+                    runLoopMark = NO;
+                }
+            }
+            
+            cleanupHandle(SIGABRT);
+            return 0;
+        }
+
         static AuthorizationRef authRef;
         static AuthorizationFlags authFlags;
         authFlags = kAuthorizationFlagDefaults

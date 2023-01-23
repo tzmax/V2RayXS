@@ -84,7 +84,7 @@ static AppDelegate *appDelegate;
     NSNumber* setingVersion = [[NSUserDefaults standardUserDefaults] objectForKey:@"setingVersion"];
     if(setingVersion == nil || [setingVersion integerValue] != kV2RayXSettingVersion) {
         NSAlert *noServerAlert = [[NSAlert alloc] init];
-        [noServerAlert setMessageText:@"If you are running V2RayX for the first time, ignore this message. \nSorry, unknown settings!\nAll V2RayX settings will be reset."];
+        [noServerAlert setMessageText:@"If you are running V2RayXS for the first time, ignore this message. \nSorry, unknown settings!\nAll V2RayXS settings will be reset."];
         [noServerAlert runModal];
         [self writeDefaultSettings]; //explicitly write default settings to user defaults file
     }
@@ -146,6 +146,7 @@ static AppDelegate *appDelegate;
     _pacModeItem.tag = pacMode;
     _globalModeItem.tag = globalMode;
     _manualModeItem.tag = manualMode;
+    _tunModeItem.tag = tunMode;
     
     // read defaults
     [self readDefaults];
@@ -491,6 +492,10 @@ static AppDelegate *appDelegate;
 }
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
+    // close the tun device helper
+    if (proxyMode == tunMode) {
+        closeHelperApplicationTask();
+    }
     //stop monitor pac
     if (dispatchPacSource) {
         dispatch_source_cancel(dispatchPacSource);
@@ -581,6 +586,7 @@ static AppDelegate *appDelegate;
         [self updateSystemProxy];
     } else {
         [self unloadV2ray];
+        closeHelperApplicationTask();
     }
     [self updateMenus];
     [self updatePacMenuList];
@@ -618,6 +624,7 @@ static AppDelegate *appDelegate;
     [_pacModeItem setState:proxyMode == pacMode];
     [_manualModeItem setState:proxyMode == manualMode];
     [_globalModeItem setState:proxyMode == globalMode];
+    [_tunModeItem setState:proxyMode == tunMode];
 }
 
 - (void)updatePacMenuList {
@@ -674,6 +681,9 @@ static AppDelegate *appDelegate;
 
 -(void)updateSystemProxy {
     NSArray *arguments;
+
+    closeHelperApplicationTask();
+    
     if (proxyState) {
         if (proxyMode == pacMode) { // pac mode
             // close system proxy first to refresh pac file
@@ -684,12 +694,16 @@ static AppDelegate *appDelegate;
         } else {
             if (proxyMode == manualMode) { // manualMode mode
                 arguments = @[@"-v"]; // do nothing
-            } else { // global mode
+            } else {
+                NSInteger cusHttpPort = 0;
+                NSInteger cusSocksPort = 0;
+                
+                NSMutableArray *serverAddress = [[NSMutableArray alloc] init];
+                
+                // global mode
                 if(useMultipleServer || !useCusProfile) {
                     arguments = @[@"global", [NSString stringWithFormat:@"%ld", localPort], [NSString stringWithFormat:@"%ld", httpPort]];
                 } else {
-                    NSInteger cusHttpPort = 0;
-                    NSInteger cusSocksPort = 0;
                     NSDictionary* cusJson = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]] options:0 error:nil];
                     if (cusJson[@"inboundDetour"] != nil && [cusJson[@"inboundDetour"] isKindOfClass:[NSArray class]]) {
                         for (NSDictionary *inboundDetour in cusJson[@"inboundDetour"]) {
@@ -710,6 +724,40 @@ static AppDelegate *appDelegate;
                     NSLog(@"socks: %ld, http: %ld", cusSocksPort, cusHttpPort);
                     arguments = @[@"global", [NSString stringWithFormat:@"%ld", cusSocksPort], [NSString stringWithFormat:@"%ld", cusHttpPort]];
                 }
+                
+                // tun mode
+                if(proxyMode == tunMode) {
+                    
+                    if(!useCusProfile) {
+                        
+                        // Get the currently selected server
+                        NSDictionary* profile = profiles[selectedServerIndex];
+                        if(profile != NULL && profile[@"settings"] != NULL && profile[@"settings"][@"vnext"] != NULL && [profile[@"settings"][@"vnext"] isKindOfClass:[NSArray class]]) {
+                            for (NSDictionary *vnextItem in profile[@"settings"][@"vnext"]) {
+                                if(vnextItem[@"address"] != NULL) {
+                                    [serverAddress addObject: vnextItem[@"address"]];
+                                }
+                            }
+                        }
+                        
+                        // Count all servers.
+                        for (NSDictionary *profile in profiles) {
+                            if(profile != NULL && profile[@"settings"] != NULL && profile[@"settings"][@"vnext"] != NULL && [profile[@"settings"][@"vnext"] isKindOfClass:[NSArray class]]) {
+                                for (NSDictionary *vnextItem in profile[@"settings"][@"vnext"]) {
+                                    if(vnextItem[@"address"] != NULL && ![serverAddress containsObject: vnextItem[@"address"]]) {
+                                        [serverAddress addObject: vnextItem[@"address"]];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if(serverAddress.count < 1) {
+                        [serverAddress addObject: @""];
+                    }
+                    arguments = @[@"tun", serverAddress[0], [NSString stringWithFormat:@"%ld", localPort]];
+                }
+                
             }
         }
         dispatch_async(taskQueue, ^{
@@ -1049,8 +1097,30 @@ static AppDelegate *appDelegate;
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%d/config.json", webServerPort]]];
 }
 
+
+NSTask *helperApplicationTask;
+
+void closeHelperApplicationTask() {
+    if(helperApplicationTask != NULL) {
+        // NSLog(@"tzmax: commTask terminate");
+        [helperApplicationTask interrupt]; // push SIGINT signal, enable the helper to perform the cleanup task.
+        sleep(1);
+        // usleep(800 * 1000);
+        [helperApplicationTask terminate];
+        helperApplicationTask = NULL;
+        return;
+    }
+}
+
 int runCommandLine(NSString* launchPath, NSArray* arguments) {
     NSTask *task = [[NSTask alloc] init];
+    
+    // take notes helperApplicationTask
+    closeHelperApplicationTask();
+    if(helperApplicationTask == NULL && [arguments[0]  isEqual: @"tun"]) {
+        helperApplicationTask = task;
+    }
+    
     [task setLaunchPath:launchPath];
     [task setArguments:arguments];
     NSPipe *stdoutpipe = [NSPipe pipe];
