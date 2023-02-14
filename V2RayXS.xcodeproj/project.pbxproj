@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		34315F9E297DB3A9000DDA2D /* route.m in Sources */ = {isa = PBXBuildFile; fileRef = 34315F9D297DB3A9000DDA2D /* route.m */; };
-		3435BF64297DD3C5008C0EF5 /* Tun2socks.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3435BF63297DD3C5008C0EF5 /* Tun2socks.xcframework */; };
+		34AA955F299B5E7500E06D1B /* Tun2socks.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 34AA955E299B5E7500E06D1B /* Tun2socks.xcframework */; };
 		34BB19C9297A7A9600331407 /* tun.m in Sources */ = {isa = PBXBuildFile; fileRef = 34BB19C8297A7A9600331407 /* tun.m */; };
 		9504C07D1C662C3000352520 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 9504C07C1C662C3000352520 /* AppDelegate.m */; };
 		9504C0801C662C3000352520 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 9504C07F1C662C3000352520 /* main.m */; };
@@ -70,16 +70,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		34058463297D69E900DD648C /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		9504C0C41C662DB400352520 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -103,7 +93,7 @@
 /* Begin PBXFileReference section */
 		34315F9D297DB3A9000DDA2D /* route.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = route.m; sourceTree = "<group>"; };
 		34315F9F297DB3BC000DDA2D /* route.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = route.h; sourceTree = "<group>"; };
-		3435BF63297DD3C5008C0EF5 /* Tun2socks.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Tun2socks.xcframework; path = "../../apple-gotun2socks-library/build/apple/Tun2socks.xcframework"; sourceTree = "<group>"; };
+		34AA955E299B5E7500E06D1B /* Tun2socks.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Tun2socks.xcframework; path = Librarys/Tun2socks.xcframework; sourceTree = "<group>"; };
 		34BB19C8297A7A9600331407 /* tun.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = tun.m; sourceTree = "<group>"; };
 		34BB19CB297A8E6600331407 /* tun.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = tun.h; sourceTree = "<group>"; };
 		9504C0781C662C3000352520 /* V2RayXS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = V2RayXS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -199,7 +189,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				3435BF64297DD3C5008C0EF5 /* Tun2socks.xcframework in Frameworks */,
+				34AA955F299B5E7500E06D1B /* Tun2socks.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -216,6 +206,7 @@
 		9504C06F1C662C3000352520 = {
 			isa = PBXGroup;
 			children = (
+				34AA955E299B5E7500E06D1B /* Tun2socks.xcframework */,
 				95862BD41DB2862E00F4A9CA /* compilefromsource.sh */,
 				9D7DFE521EBEC947001FECBD /* jsonplist */,
 				95FCB2451C688BB20081B6FD /* Frameworks */,
@@ -294,7 +285,6 @@
 				34BB19CB297A8E6600331407 /* tun.h */,
 				34315F9D297DB3A9000DDA2D /* route.m */,
 				34315F9F297DB3BC000DDA2D /* route.h */,
-				3435BF63297DD3C5008C0EF5 /* Tun2socks.xcframework */,
 			);
 			path = v2rayx_sysconf;
 			sourceTree = "<group>";
@@ -437,7 +427,6 @@
 				9504C0C21C662DB400352520 /* Sources */,
 				9504C0C31C662DB400352520 /* Frameworks */,
 				9504C0C41C662DB400352520 /* CopyFiles */,
-				34058463297D69E900DD648C /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -800,7 +789,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 0;
 				INFOPLIST_FILE = V2RayX/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -823,7 +812,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 0;
 				INFOPLIST_FILE = V2RayX/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

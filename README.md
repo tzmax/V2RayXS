@@ -24,13 +24,13 @@ This mode adopts the tun2socks method to forward all traffic, realizes the creat
 
 Finally, if you are interested in this technology, you can also try to contact me or submit a PR to help me improve this function. If you can recommend this software to friends or post a blog and be able to link this project in other post replies, I will Very happy 😋, thank you for your attention and contribution (Welcome to contribute documents in other languages)
 
-1. Please understand what transparent proxy is, if PAC mode and global mode can meet your needs, please try to use it
+1. Please understand what transparent proxy is, if PAC mode and global mode can meet your needs, please try to use it (recommended reference this page [What is a transparent proxy?](https://xtls.github.io/Xray-docs-next/document/level-2/transparent_proxy/transparent_proxy.html))
 
 2. You have a certain understanding of the computer network and can solve the network problem of your device independently
 
 ### Have you encountered a problem?
 
-Q: After using tun mode, the device is disconnected from the network? (recommended reference this page [What is a transparent proxy?](https://xtls.github.io/Xray-docs-next/document/level-2/transparent_proxy/transparent_proxy.html))
+Q: After using tun mode, the device is disconnected from the network? 
 
 A: It may be that the route of the default gateway is broken. You can check your routing table by executing the `netstat -r` command through the device terminal. Normally, there will be a `default` route, as follows
 

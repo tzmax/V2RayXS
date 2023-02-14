@@ -4,22 +4,28 @@ GREEN='\033[0;32m'
 BOLD='\033[1m'
 NORMAL='\033[0m'
 
+osArch=$(uname -m)
+coreArch="${osArch}"
+if [ "${ARCHS}" == "arm64" ]; then
+    coreArch="arm64"
+fi
 cd "$SRCROOT"
 output="v${VERSION}"
-if [[ -f ./xray-core-bin/xray ]] || [ "$1" == "" ]; then
+if [[ -f ./xray-core-bin/xray ]] && [ "$osArch" == "$coreArch" ]; then
     output=$(./xray-core-bin/xray --version)
 fi
 existingVersion=${output:5:${#VERSION}}
-osArch=$(uname -m)
-if [[ "$VERSION" != "$existingVersion" ]] || [ "$1" != "" ]; then
+
+if [ "$VERSION" != "$existingVersion" ]; then
     getCore=0
+    [ -d "xray-core-bin" ] && rm -rf xray-core-bin
     mkdir -p xray-core-bin
     cd xray-core-bin
-    osArchName="64" # intel
-    if [[ "$osArch" != "x86_64" ]] || [ "$1" == "arm64" ]; then
-        osArchName="arm64-v8a" # m1
+    archName="64" # intel
+    if [[ "$coreArch" == "arm64" ]]; then
+        archName="arm64-v8a" # m1
     fi
-    curl -s -L -o xray-macos.zip https://github.com/XTLS/Xray-core/releases/download/v${VERSION}/Xray-macos-${osArchName}.zip
+    curl -s -L -o xray-macos.zip https://github.com/XTLS/Xray-core/releases/download/v${VERSION}/Xray-macos-${archName}.zip
     if [[ $? == 0 ]]; then
         unzip -o xray-macos.zip
         getCore=1
@@ -31,7 +37,8 @@ if [[ "$VERSION" != "$existingVersion" ]] || [ "$1" != "" ]; then
             chmod +x xray-${VERSION}-macos/xray
             output=$(xray-${VERSION}-macos/xray --version)
             existingVersion=${output:5:${#VERSION}}
-            if [ "$VERSION" != "$existingVersion" ]; then
+            echo "existingVersion ${existingVersion}"
+            if [[ "$VERSION" != "$existingVersion" ]] && [ "$osArch" == "$coreArch" ]; then
                 echo "${RED}xray-macos.zip in the Downloads folder does not contain version ${VERSION}."
                 echo "下载文件夹里的xray-macos.zip不是${VERSION}版本。${NORMAL}"
                 getCore=0
