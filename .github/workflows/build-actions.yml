@@ -1,0 +1,35 @@
+name: V2RayXS build actions
+
+on:   
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-all:
+    name: Build and analyse default scheme using xcodebuild command
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Init
+        run: git submodule init && git submodule update
+      - name: Build V2RayXS for x86_64 Arch
+        run: /usr/bin/env bash build.sh x86_64
+      - name: Build V2RayXS for arm64 Arch
+        run: /usr/bin/env bash build.sh arm64
+      - name: Uploading assets...
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: Release ${{ github.ref }}
+          body: "- TODO New Release.\n\nUpdate: 00/00/00\n\nThanks again to the contributors. 🌈\nlight up the star to let me know you are using it. 💫\nthank you for your support."
+          draft: true
+          prerelease: true
+          append_body: true
+          files: |
+            build/out/V2RayXS_x86_64.app.zip
+            build/out/V2RayXS_arm64.app.zip
