@@ -93,7 +93,7 @@ static AppDelegate *appDelegate;
     [self addObserver:self forKeyPath:@"selectedPacFileName" options:NSKeyValueObservingOptionNew context:nil];
     
     // create a serial queue used for NSTask operations
-    taskQueue = dispatch_queue_create("cenmrev.v2rayxs.nstask", DISPATCH_QUEUE_SERIAL);
+    taskQueue = dispatch_queue_create("cenmrev.v2rayxs.nstask", DISPATCH_QUEUE_CONCURRENT);
     // create a loop to run core
     coreLoopSemaphore = dispatch_semaphore_create(0);
     coreLoopQueue = dispatch_queue_create("cenmrev.v2rayxs.coreloop", DISPATCH_QUEUE_SERIAL);
@@ -494,7 +494,9 @@ static AppDelegate *appDelegate;
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
     // close the tun device helper
     if (proxyMode == tunMode) {
-        closeHelperApplicationTask();
+        dispatch_async(taskQueue, ^{
+            closeHelperApplicationTask();
+        });
     }
     //stop monitor pac
     if (dispatchPacSource) {
@@ -585,8 +587,10 @@ static AppDelegate *appDelegate;
     if (proxyState == true) {
         [self updateSystemProxy];
     } else {
+        dispatch_async(taskQueue, ^{
+            closeHelperApplicationTask();
+        });
         [self unloadV2ray];
-        closeHelperApplicationTask();
     }
     [self updateMenus];
     [self updatePacMenuList];
@@ -599,6 +603,13 @@ static AppDelegate *appDelegate;
     if (proxyState == true && proxyMode != manualMode && [sender tag] == manualMode) {
         _enableRestore ? [self restoreSystemProxy] : [self cancelSystemProxy];
     }
+    
+    if (proxyMode == tunMode) {
+        dispatch_async(taskQueue, ^{
+            closeHelperApplicationTask();
+        });
+    }
+
     proxyMode = [sender tag];
     [self updateMenus];
     if (sender == _pacModeItem) {
@@ -681,8 +692,9 @@ static AppDelegate *appDelegate;
 
 -(void)updateSystemProxy {
     NSArray *arguments;
-
-    closeHelperApplicationTask();
+    dispatch_async(taskQueue, ^{
+        closeHelperApplicationTask();
+    });
     
     if (proxyState) {
         if (proxyMode == pacMode) { // pac mode
@@ -1101,7 +1113,7 @@ static AppDelegate *appDelegate;
 NSTask *helperApplicationTask;
 
 void closeHelperApplicationTask() {
-    if(helperApplicationTask != NULL) {
+    if(helperApplicationTask != NULL && [helperApplicationTask isRunning]) {
         // NSLog(@"tzmax: commTask terminate");
         [helperApplicationTask interrupt]; // push SIGINT signal, enable the helper to perform the cleanup task.
         sleep(1);

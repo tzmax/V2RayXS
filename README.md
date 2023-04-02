@@ -1,8 +1,8 @@
 # V2RayXS: A simple GUI for Xray on macOS
 
-![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/tzmax/V2RayXS)
+[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/tzmax/V2RayXS)](https://github.com/tzmax/V2RayXS/releases)
 ![GitHub release (latest by date)](https://img.shields.io/github/downloads/tzmax/V2RayXS/latest/total)
-[![Build Status](https://travis-ci.org/tzmax/V2RayXS.svg?branch=master)](https://travis-ci.org/tzmax/V2RayXS)
+[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/tzmax/V2RayXS/build-actions.yml)](https://github.com/tzmax/V2RayXS/actions/workflows/build-actions.yml)
 
 **Attention**: If you want to use v2ray-core version please install the original project. <https://github.com/Cenmrev/V2RayX>
 
@@ -24,9 +24,9 @@ This mode adopts the tun2socks method to forward all traffic, realizes the creat
 
 Finally, if you are interested in this technology, you can also try to contact me or submit a PR to help me improve this function. If you can recommend this software to friends or post a blog and be able to link this project in other post replies, I will Very happy 😋, thank you for your attention and contribution (Welcome to contribute documents in other languages)
 
-1. Please understand what transparent proxy is, if PAC mode and global mode can meet your needs, please try to use it (recommended reference this page [What is a transparent proxy?](https://xtls.github.io/Xray-docs-next/document/level-2/transparent_proxy/transparent_proxy.html))
+1. Please understand what transparent proxy is (recommended reference this page [What is a transparent proxy?](https://xtls.github.io/Xray-docs-next/document/level-2/transparent_proxy/transparent_proxy.html)), if PAC mode and global mode can meet your needs, please try to use it.
 
-2. You have a certain understanding of the computer network and can solve the network problem of your device independently
+2. You have a certain understanding of the computer network and can solve the network problem of your device independently.
 
 ### Have you encountered a problem?
 
@@ -45,6 +45,12 @@ default            192.168.1.1        UGScg             en0
 localhost          localhost          UH                lo0    
 ………
 ```
+
+Q: How to fix you gateway? (if you can't access the Internet after turning off tun mode after using tun mode, you can try to fix it like this. If it still doesn't work, you can try to restart your device)
+
+A: If you know your default gateway, after turning off tun mode, you can set the default gateway through the `/sbin/route add -net` command
+
+for example: `sudo /sbin/route add -net default 192.168.1.1`
 
 Q: Which tun device does the V2RayXS create?
 
@@ -81,6 +87,8 @@ V2RayXS provide three modes:
 -   Global Mode: V2RayXS asks macOS to route all internet traffic to xray core if the network traffic obeys operating system's network rules.
 -   PAC Mode: macOS will determine the routing based on a pac file and some traffic may be routed to xray core.
 -   Manual Mode: V2RayXS will not modify any macOS network settings, but only start or stop xray core.
+-   Tun Mode (**Experimental**): V2RayXS will create a virtual network card, and then try to set the default gateway to take over and proxy the full traffic of the device.
+
 
 Options in menu list `Routing Rule` determine how xray core deals with incoming traffic. Core routing rules apply to all three modes above.
 
@@ -123,9 +131,6 @@ To donate to Project Xray, you may refer to [this page](https://xtls.github.io/#
 
 ## Disclaimer
 
-This tool is mainly for personal usage. For professional users and technique
-support, commercial software like proxifier is recommended. Please refer to [#60](https://github.com/tzmax/V2RayXS/issues/60#issuecomment-369531443).
+V2rayXS will not be updated frequently. Users can replace V2RayXS.app/Contents/Resources/xray with the newest Xray-core downloaded from <https://github.com/XTLS/Xray-core/releases>.
 
-The Maintaining developers need to complete school courses. So V2rayXS will not be updated frequently. Users can replace V2RayXS.app/Contents/Resources/xray with the newest Xray-core downloaded from <https://github.com/XTLS/Xray-core/releases>.
-
-The developer currently does not have enough time to add more features to V2RayXS, nor to merge PRs. However, forking and releasing your own version are always welcome.
+The developer currently does not have enough time to add more features to V2RayXS. However, welcome to the contribution at any time, and the fork and your own version.

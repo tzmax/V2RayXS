@@ -41,17 +41,20 @@ NSString* tunMask = @"255.255.255.0";
 NSString* tunDns = @"8.8.8.8,8.8.4.4,1.1.1.1";
 NSString* proxyServer;
 NSString* exampleServer = @"93.184.216.34"; // example.com ip use to identify records
+NSString *runtimeMode = @"";
 
 // helper perform the cleanup task.
 void cleanupHandle(int signal_ns) {
     // printf("app kill signal %d\n", signal_ns);
     
-    // Restore the default route
-    if (![defaultRouteGateway isEqualToString:@""] && routeHelper != NULL) {
-        [routeHelper routeDelete:@"default" gateway:tunWg];
-        [routeHelper routeAdd:@"default" gateway:defaultRouteGateway];
-        [routeHelper routeDelete:proxyServer gateway:defaultRouteGateway];
-        printf("reset DefaultRouteGateway %s\n", [defaultRouteGateway UTF8String]);
+    if ([runtimeMode isEqualToString: @"tun"]) {
+        // Restore the default route
+        if (![defaultRouteGateway isEqualToString:@""] && routeHelper != NULL) {
+            [routeHelper routeDelete:@"default" gateway:tunWg];
+            [routeHelper routeAdd:@"default" gateway:defaultRouteGateway];
+            [routeHelper routeDelete:proxyServer gateway:defaultRouteGateway];
+            printf("reset DefaultRouteGateway %s\n", [defaultRouteGateway UTF8String]);
+        }
     }
     
     runLoopMark = NO;
@@ -84,6 +87,8 @@ int main(int argc, const char * argv[])
             printf(INFO);
             return 1;
         }
+        
+        runtimeMode = mode;
         
         if ([mode isEqualToString:@"-v"]) {
             printf("%s", [VERSION UTF8String]);
