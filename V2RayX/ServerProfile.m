@@ -49,6 +49,7 @@
                                           @"congestion": [NSNumber numberWithBool:NO],
                                           @"readBufferSize": @1,
                                           @"writeBufferSize": @1,
+                                          @"seed": @"",
                                           @"header": @{
                                                   @"type": @"none"
                                                   }
