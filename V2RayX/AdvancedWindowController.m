@@ -561,6 +561,7 @@
         _domainEnableButton.enabled = !selectedLastRule;
         _domainEnableButton.state = rules[@"domain"] != NULL;
         _editDomainButton.enabled = _domainEnableButton.state;
+        _domainTextView.textColor = NSColor.textColor;
         if (rules[@"domain"]) {
             _domainTextView.string = [rules[@"domain"] componentsJoinedByString:@"\n"];
         } else {
@@ -570,6 +571,7 @@
         _ipEnableButton.enabled = !selectedLastRule;
         _ipEnableButton.state = rules[@"ip"] != NULL;
         _editIpButton.enabled = _ipEnableButton.state;
+        _ipTextView.textColor = NSColor.textColor;
         if (rules[@"ip"]) {
             _ipTextView.string = [rules[@"ip"] componentsJoinedByString:@"\n"];
         } else {
