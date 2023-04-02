@@ -286,8 +286,13 @@
 }
 
 + (NSMutableDictionary*)importFromHTTPSubscription: (NSString*)httpLink {
+    // decode base64String
+    NSString *base64String = [self decodeBase64String:httpLink];
+    if(base64String != nil && ![base64String isEqual: @""]) {
+        httpLink = base64String;
+    }
     // https://blog.csdn.net/yi_zz32/article/details/48769487
-    NSMutableDictionary* result = [@{@"vmess": @[], @"other": @[]} mutableDeepCopy];
+    NSMutableDictionary* result = [@{@"vmess": @[], @"other": @[], @"vless": @[]} mutableDeepCopy];
     if ([httpLink length] < 4) {
         return nil;
     }

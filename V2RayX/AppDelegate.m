@@ -660,6 +660,7 @@ static AppDelegate *appDelegate;
     }
     [_pacListMenu addItem:[NSMenuItem separatorItem]];
     [_pacListMenu addItem:_editPacMenuItem];
+    [_pacListMenu addItem:_resetPacMenuItem];
 }
 
 - (IBAction)editPac:(id)sender {
@@ -793,6 +794,9 @@ static AppDelegate *appDelegate;
             NSDictionary* r = [ConfigImporter importFromHTTPSubscription:link];
             if (r) {
                 for (ServerProfile* p in r[@"vmess"]) {
+                    [self.subsOutbounds addObject:[p outboundProfile]];
+                }
+                for (ServerProfile* p in r[@"vless"]) {
                     [self.subsOutbounds addObject:[p outboundProfile]];
                 }
                 [self.subsOutbounds addObjectsFromArray:r[@"other"]];

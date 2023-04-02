@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<document type="com.apple.InterfaceBuilder3.Cocoa.XIB" version="3.0" toolsVersion="20037" targetRuntime="MacOSX.Cocoa" propertyAccessControl="none" useAutolayout="YES" customObjectInstantitationMethod="direct">
+<document type="com.apple.InterfaceBuilder3.Cocoa.XIB" version="3.0" toolsVersion="21507" targetRuntime="MacOSX.Cocoa" propertyAccessControl="none" useAutolayout="YES" customObjectInstantitationMethod="direct">
     <dependencies>
         <deployment identifier="macosx"/>
-        <plugIn identifier="com.apple.InterfaceBuilder.CocoaPlugin" version="20037"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.CocoaPlugin" version="21507"/>
     </dependencies>
     <objects>
         <customObject id="-2" userLabel="File's Owner" customClass="NSApplication">
@@ -21,6 +21,7 @@
                 <outlet property="manualModeItem" destination="P4q-kj-6fs" id="5XH-9p-w3e"/>
                 <outlet property="pacListMenu" destination="yno-KX-HOj" id="qzq-pN-ala"/>
                 <outlet property="pacModeItem" destination="Cm9-3e-L2z" id="IvE-nJ-dW0"/>
+                <outlet property="resetPacMenuItem" destination="oGZ-uP-dny" id="vkO-eN-sa9"/>
                 <outlet property="ruleSetMenuList" destination="8Ld-d4-m0U" id="DNS-66-cYT"/>
                 <outlet property="serverListMenu" destination="eqU-gH-G4L" id="unc-2a-DIW"/>
                 <outlet property="serversItem" destination="3wi-Co-2Kd" id="kKi-8l-dDJ"/>
@@ -760,12 +761,6 @@
                         <action selector="copyExportCmd:" target="Voe-Tx-rLC" id="OMz-Lv-Wmr"/>
                     </connections>
                 </menuItem>
-                <menuItem title="Reset pac file" id="oGZ-uP-dny">
-                    <modifierMask key="keyEquivalentModifierMask"/>
-                    <connections>
-                        <action selector="resetPac:" target="Voe-Tx-rLC" id="WUw-A2-aU5"/>
-                    </connections>
-                </menuItem>
                 <menuItem title="Authorize xray_sysconf..." id="mOc-zi-Beb">
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <connections>
@@ -805,6 +800,12 @@
             <modifierMask key="keyEquivalentModifierMask"/>
             <connections>
                 <action selector="editPac:" target="Voe-Tx-rLC" id="4jX-Hv-SpU"/>
+            </connections>
+        </menuItem>
+        <menuItem title="Reset pac file" id="oGZ-uP-dny">
+            <modifierMask key="keyEquivalentModifierMask"/>
+            <connections>
+                <action selector="resetPac:" target="Voe-Tx-rLC" id="WUw-A2-aU5"/>
             </connections>
         </menuItem>
         <menuItem title="Update subscription" id="C3a-eC-bFQ">
