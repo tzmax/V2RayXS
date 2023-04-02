@@ -335,6 +335,11 @@
 }
 
 + (ServerProfile*)importFromVmessOfV2RayN:(NSString*)vmessStr {
+    // decode base64String
+    NSString *base64String = [self decodeBase64String:vmessStr];
+    if(base64String != nil && ![base64String isEqual: @""]) {
+        vmessStr = base64String;
+    }
     if ([vmessStr length] < 9 || ![[[vmessStr substringToIndex:8] lowercaseString] isEqualToString:@"vmess://"]) {
         return nil;
     }
@@ -430,6 +435,12 @@
 
 // 目前为初步提案, 详情请见 VMessAEAD / VLESS 分享链接标准提案 https://github.com/XTLS/Xray-core/issues/91
 + (ServerProfile*)importFromVLESSOfXray:(NSString*)vlessStr {
+    // decode base64String
+    NSString *base64String = [self decodeBase64String:vlessStr];
+    if(base64String != nil && ![base64String isEqual: @""]) {
+        vlessStr = base64String;
+    }
+    
     if ([vlessStr length] < 9 || ![[[vlessStr substringToIndex:8] lowercaseString] isEqualToString:@"vless://"]) {
         return nil;
     }
