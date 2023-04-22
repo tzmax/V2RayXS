@@ -16,6 +16,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (BOOL)checkInputs;
 - (NSArray*)generateSettings;
+- (CGFloat)tlsPanelHeight;
+
+@property (nonatomic, getter=tlsPanelHeight) CGFloat tlsPanelHeight;
 
 //kcp fields
 @property (weak) IBOutlet NSTextField *kcpMtuField;
@@ -51,6 +54,18 @@ NS_ASSUME_NONNULL_BEGIN
 @property (weak) IBOutlet NSButton *tlsAllowInsecureCiphersButton;
 @property (weak) IBOutlet NSTextField *tlsAlpnField;
 @property (weak) IBOutlet NSTextField *tlsServerNameField;
+
+- (IBAction)tlsSecurityChange:(NSPopUpButton *)sender;
+
+
+//reality fields
+@property (weak) IBOutlet NSScrollView *tlsScrollController;
+@property (weak) IBOutlet NSView *tlsConfigurationPanel;
+@property (weak) IBOutlet NSView *realityControlPanel;
+@property (weak) IBOutlet NSTextField *realityFingerprint;
+@property (weak) IBOutlet NSTextField *realityShortID;
+@property (weak) IBOutlet NSTextField *realitySpiderX;
+@property (weak) IBOutlet NSTextField *realityPubilcKey;
 
 //mux fields
 @property (weak) IBOutlet NSButton *muxEnableButton;
