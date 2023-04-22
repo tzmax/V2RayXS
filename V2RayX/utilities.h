@@ -19,7 +19,7 @@
 #define VMESS_SECURITY_LIST (@[@"none", @"auto", @"aes-128-gcm", @"chacha20-poly1305"])
 #define NETWORK_LIST (@[@"tcp", @"kcp", @"ws", @"http", @"quic", @"grpc"])
 #define QUIC_SECURITY_LIST (@[@"none", @"aes-128-gcm", @"chacha20-poly1305"])
-#define TLS_SECURITY_LIST (@[@"none", @"tls", @"xtls"])
+#define TLS_SECURITY_LIST (@[@"none", @"tls", @"xtls", @"reality"])
 #define nilCoalescing(a,b) ( (a != nil) ? (a) : (b) ) // equivalent to ?? operator in Swift
 
 #define TCP_NONE_HEADER_OBJECT (@"{\"type\": \"none\"}")

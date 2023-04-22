@@ -438,7 +438,7 @@
     return newProfile;
 }
 
-// 目前为初步提案, 详情请见 VMessAEAD / VLESS 分享链接标准提案 https://github.com/XTLS/Xray-core/issues/91
+// 目前为初步提案, 详情请见 VMessAEAD / VLESS 分享链接标准提案 https://github.com/XTLS/Xray-core/discussions/716
 + (ServerProfile*)importFromVLESSOfXray:(NSString*)vlessStr {
     // decode base64String
     NSString *base64String = [self decodeBase64String:vlessStr];
@@ -543,6 +543,7 @@
             }
             break;
         case grpc:
+            streamSettings[@"grpcSettings"][@"headerType"] = nilCoalescing([sharedServer objectForKey:@"headerType"], @"");
             streamSettings[@"grpcSettings"][@"serviceName"] = nilCoalescing([sharedServer objectForKey:@"serviceName"], @"");
             if ([[sharedServer objectForKey:@"mode"] containsString:@"multi"]) {
                 streamSettings[@"grpcSettings"][@"multiMode"] = @YES;
@@ -570,12 +571,26 @@
             settingsName = @"tlsSettings";
         }
         
+        // temporarily compatible with xtls configuration, will be obsolete soon
         if ([sharedServer[@"security"] isEqualToString:@"xtls"] && [sharedServer objectForKey:@"flow"]) {
             newProfile.flow = searchInArray(nilCoalescing(sharedServer[@"flow"], @""), VLESS_FLOW_LIST);
             settingsName = @"xtlsSettings";
         }
         
+        if ([sharedServer[@"security"] isEqualToString:@"reality"]) {
+            newProfile.flow = searchInArray(nilCoalescing(sharedServer[@"flow"], @""), VLESS_FLOW_LIST);
+            settingsName = @"realitySettings";
+            streamSettings[settingsName][@"fingerprint"] = nilCoalescing(sharedServer[@"fp"], @"chrome");
+            streamSettings[settingsName][@"shortId"] = nilCoalescing(sharedServer[@"sid"], @"");
+            streamSettings[settingsName][@"spiderX"] = [nilCoalescing(sharedServer[@"spx"], @"") stringByRemovingPercentEncoding];
+            if ([sharedServer objectForKey:@"pbk"]) {
+                streamSettings[settingsName][@"publicKey"] = nilCoalescing(sharedServer[@"pbk"], @"");
+            }
+        }
+        
         if ([settingsName isNotEqualTo:@""]) {
+            streamSettings[settingsName][@"allowInsecure"] = nilCoalescing(sharedServer[@"allowInsecure"], @NO);
+            streamSettings[settingsName][@"allowInsecureCiphers"] = nilCoalescing(sharedServer[@"allowInsecureCiphers"], @NO);
             streamSettings[settingsName][@"serverName"] = nilCoalescing(sharedServer[@"sni"], newProfile.address);
             if ([sharedServer objectForKey:@"alpn"]) {
                 streamSettings[settingsName][@"alpn"] = [sharedServer[@"alpn"] stringByRemovingPercentEncoding];
