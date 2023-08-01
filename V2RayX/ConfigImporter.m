@@ -580,7 +580,6 @@
         if ([sharedServer[@"security"] isEqualToString:@"reality"]) {
             newProfile.flow = searchInArray(nilCoalescing(sharedServer[@"flow"], @""), VLESS_FLOW_LIST);
             settingsName = @"realitySettings";
-            streamSettings[settingsName][@"fingerprint"] = nilCoalescing(sharedServer[@"fp"], @"chrome");
             streamSettings[settingsName][@"shortId"] = nilCoalescing(sharedServer[@"sid"], @"");
             streamSettings[settingsName][@"spiderX"] = [nilCoalescing(sharedServer[@"spx"], @"") stringByRemovingPercentEncoding];
             if ([sharedServer objectForKey:@"pbk"]) {
@@ -592,6 +591,7 @@
             streamSettings[settingsName][@"allowInsecure"] = nilCoalescing(sharedServer[@"allowInsecure"], @NO);
             streamSettings[settingsName][@"allowInsecureCiphers"] = nilCoalescing(sharedServer[@"allowInsecureCiphers"], @NO);
             streamSettings[settingsName][@"serverName"] = nilCoalescing(sharedServer[@"sni"], newProfile.address);
+            streamSettings[settingsName][@"fingerprint"] = nilCoalescing(sharedServer[@"fp"], @"chrome");
             if ([sharedServer objectForKey:@"alpn"]) {
                 streamSettings[settingsName][@"alpn"] = [sharedServer[@"alpn"] stringByRemovingPercentEncoding];
             }

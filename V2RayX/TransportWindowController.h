@@ -59,8 +59,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 //reality fields
-@property (weak) IBOutlet NSScrollView *tlsScrollController;
-@property (weak) IBOutlet NSView *tlsConfigurationPanel;
 @property (weak) IBOutlet NSView *realityControlPanel;
 @property (weak) IBOutlet NSTextField *realityFingerprint;
 @property (weak) IBOutlet NSTextField *realityShortID;

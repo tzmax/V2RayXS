@@ -57,17 +57,9 @@
 }
 
 -(void)loadTLSPanel {
-    CGFloat h = _realityControlPanel.frame.size.height - 85.0;
-    
-    if(self.tlsPanelHeight <= 0) {
-        self.tlsPanelHeight = _tlsConfigurationPanel.frame.size.height;
-    }
-    
     if ([_tlsSecurityButton.selectedItem.title isEqual: @"reality"]) {
-        [_tlsConfigurationPanel setFrameSize:NSMakeSize( _tlsConfigurationPanel.frame.size.width, self.tlsPanelHeight  + h )];
         [_realityControlPanel setHidden: false];
     } else {
-        [_tlsConfigurationPanel setFrameSize:NSMakeSize( _tlsConfigurationPanel.frame.size.width, self.tlsPanelHeight - h)];
         [_realityControlPanel setHidden: true];
     }
 }
@@ -125,17 +117,16 @@
     NSString* alpnString = [alpnArray componentsJoinedByString:@","];
     [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"http/1.1")];
     [_tlsServerNameField setStringValue:streamSettings[@"tlsSettings"][@"serverName"]];
+    [_realityFingerprint setStringValue:nilCoalescing(tlsSettings[@"fingerprint"], @"chrome")];
     
     // tls panel settings
     [self loadTLSPanel];
-    _tlsScrollController.automaticallyAdjustsContentInsets = true;
-    [_tlsConfigurationPanel scrollPoint:NSMakePoint(0.0, 10000)];
-    
+
     // reality
     NSDictionary* realitySettings = [streamSettings objectForKey:@"realitySettings"];
     if(realitySettings != nil) {
         [_tlsServerNameField setStringValue:realitySettings[@"serverName"]];
-        [_realityFingerprint setStringValue:realitySettings[@"fingerprint"]];
+        [_realityFingerprint setStringValue:nilCoalescing(realitySettings[@"fingerprint"], @"chrome")];
         [_realityPubilcKey setStringValue:realitySettings[@"publicKey"]];
         [_realityShortID setStringValue:realitySettings[@"shortId"]];
         [_realitySpiderX setStringValue:realitySettings[@"spiderX"]];
@@ -149,6 +140,7 @@
         alpnString = [alpnArray componentsJoinedByString:@","];
         [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"http/1.1")];
         [_tlsServerNameField setStringValue:streamSettings[@"xtlsSettings"][@"serverName"]];
+        [_realityFingerprint setStringValue:nilCoalescing(xtlsSettings[@"fingerprint"], @"chrome")];
     }
 
     // mux
