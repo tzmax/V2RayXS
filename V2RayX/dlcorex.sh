@@ -1,4 +1,4 @@
-VERSION="1.8.3"
+VERSION="1.8.4"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BOLD='\033[1m'
@@ -34,8 +34,8 @@ if [ "$VERSION" != "$existingVersion" ]; then
         if [[ $? != 0 ]]; then
             getCore=0
         else
-            chmod +x xray-${VERSION}-macos/xray
-            output=$(xray-${VERSION}-macos/xray --version)
+            chmod +x xray-macos/xray
+            output=$(xray-macos/xray --version)
             existingVersion=${output:5:${#VERSION}}
             echo "existingVersion ${existingVersion}"
             if [[ "$VERSION" != "$existingVersion" ]] && [ "$osArch" == "$coreArch" ]; then
