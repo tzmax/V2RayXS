@@ -45,6 +45,7 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 }
 
 @property NSString* logDirPath;
+@property NSString* webServerUuidString;
 
 @property BOOL proxyState;
 @property ProxyMode proxyMode;

@@ -128,9 +128,20 @@ static AppDelegate *appDelegate;
         return [GCDWebServerDataResponse responseWithData:[weakSelf pacData] contentType:@"application/x-ns-proxy-autoconfig"];
     }];
     [webServer addHandlerForMethod:@"GET" path:@"/config.json" requestClass:[GCDWebServerRequest class] processBlock:^GCDWebServerResponse * _Nullable(__kindof GCDWebServerRequest * _Nonnull request) {
-        return [GCDWebServerDataResponse responseWithData:[weakSelf v2rayJSONconfig] contentType:@"application/json"];
+        // check uuid
+        NSString *uuid = request.query[@"u"];
+        if(uuid != NULL) {
+            uuid = [uuid uppercaseString];
+            if([uuid isEqualToString:weakSelf.webServerUuidString]) {
+                return [GCDWebServerDataResponse responseWithData:[weakSelf v2rayJSONconfig] contentType:@"application/json"];
+            }
+        }
+        return [GCDWebServerResponse responseWithStatusCode:404];
     }];
-    [webServer startWithPort:webServerPort bonjourName:nil];
+
+    // only bind localhost
+    NSDictionary *options = @{ @"Port": @webServerPort, @"BindToLocalhost": @YES };
+    [webServer startWithOptions:options  error:nil];
     
     
     [self checkUpgrade:self];
@@ -1110,7 +1121,11 @@ static AppDelegate *appDelegate;
 }
 
 - (IBAction)viewConfigJson:(NSMenuItem *)sender {
-    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%d/config.json", webServerPort]]];
+    if(_webServerUuidString == nil) {
+        NSUUID *uuid = [NSUUID UUID];
+        _webServerUuidString = [uuid UUIDString];
+    }
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%d/config.json?u=%@", webServerPort, _webServerUuidString]]];
 }
 
 
