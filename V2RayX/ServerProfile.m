@@ -70,7 +70,8 @@
                                   @"grpcSettings": @{
                                           @"multiMode": [NSNumber numberWithBool:NO],
                                           },
-                                  @"sockopt": @{}
+                                  @"sockopt": @{},
+                                  @"realitySettings": @{}
                                   }];
         [self setMuxSettings:@{
                                @"enabled": [NSNumber numberWithBool:NO],
