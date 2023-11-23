@@ -709,86 +709,86 @@ static AppDelegate *appDelegate;
     });
     
     if (proxyState) {
-        if (proxyMode == pacMode) { // pac mode
-            // close system proxy first to refresh pac file
-            dispatch_async(taskQueue, ^{
-                runCommandLine(kV2RayXHelper, @[@"off"]);
-            });
+        if (proxyMode == manualMode) { // manualMode mode
+            arguments = @[@"-v"]; // do nothing
+        } else if (proxyMode == pacMode) { // pac mode
             arguments = @[@"auto"];
         } else {
-            if (proxyMode == manualMode) { // manualMode mode
-                arguments = @[@"-v"]; // do nothing
+            NSInteger cusHttpPort = 0;
+            NSInteger cusSocksPort = 0;
+            
+            NSMutableArray *serverAddress = [[NSMutableArray alloc] init];
+            
+            // global mode
+            if(useMultipleServer || !useCusProfile) {
+                arguments = @[@"global", [NSString stringWithFormat:@"%ld", localPort], [NSString stringWithFormat:@"%ld", httpPort]];
             } else {
-                NSInteger cusHttpPort = 0;
-                NSInteger cusSocksPort = 0;
+                NSDictionary* cusJson = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]] options:0 error:nil];
+                if (cusJson[@"inboundDetour"] != nil && [cusJson[@"inboundDetour"] isKindOfClass:[NSArray class]]) {
+                    for (NSDictionary *inboundDetour in cusJson[@"inboundDetour"]) {
+                        if ([inboundDetour[@"protocol"] isEqualToString:@"http"]) {
+                            cusHttpPort = [inboundDetour[@"port"] integerValue];
+                        }
+                        if ([inboundDetour[@"protocol"] isEqualToString:@"socks"]) {
+                            cusSocksPort = [inboundDetour[@"port"] integerValue];
+                        }
+                    }
+                }
+                if ([cusJson[@"inbound"][@"protocol"] isEqualToString:@"http"]) {
+                    cusHttpPort = [cusJson[@"inbound"][@"port"] integerValue];
+                }
+                if ([cusJson[@"inbound"][@"protocol"] isEqualToString:@"socks"]) {
+                    cusSocksPort = [cusJson[@"inbound"][@"port"] integerValue];
+                }
+                NSLog(@"socks: %ld, http: %ld", cusSocksPort, cusHttpPort);
+                arguments = @[@"global", [NSString stringWithFormat:@"%ld", cusSocksPort], [NSString stringWithFormat:@"%ld", cusHttpPort]];
+            }
+            
+            // tun mode
+            if(proxyMode == tunMode) {
                 
-                NSMutableArray *serverAddress = [[NSMutableArray alloc] init];
-                
-                // global mode
-                if(useMultipleServer || !useCusProfile) {
-                    arguments = @[@"global", [NSString stringWithFormat:@"%ld", localPort], [NSString stringWithFormat:@"%ld", httpPort]];
-                } else {
-                    NSDictionary* cusJson = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]] options:0 error:nil];
-                    if (cusJson[@"inboundDetour"] != nil && [cusJson[@"inboundDetour"] isKindOfClass:[NSArray class]]) {
-                        for (NSDictionary *inboundDetour in cusJson[@"inboundDetour"]) {
-                            if ([inboundDetour[@"protocol"] isEqualToString:@"http"]) {
-                                cusHttpPort = [inboundDetour[@"port"] integerValue];
-                            }
-                            if ([inboundDetour[@"protocol"] isEqualToString:@"socks"]) {
-                                cusSocksPort = [inboundDetour[@"port"] integerValue];
+                if(!useCusProfile) {
+                    // Get the currently selected server
+                    NSDictionary* profile = profiles[selectedServerIndex];
+                    if(profile != NULL && profile[@"settings"] != NULL && profile[@"settings"][@"vnext"] != NULL && [profile[@"settings"][@"vnext"] isKindOfClass:[NSArray class]]) {
+                        for (NSDictionary *vnextItem in profile[@"settings"][@"vnext"]) {
+                            if(vnextItem[@"address"] != NULL) {
+                                [serverAddress addObject: vnextItem[@"address"]];
                             }
                         }
                     }
-                    if ([cusJson[@"inbound"][@"protocol"] isEqualToString:@"http"]) {
-                        cusHttpPort = [cusJson[@"inbound"][@"port"] integerValue];
-                    }
-                    if ([cusJson[@"inbound"][@"protocol"] isEqualToString:@"socks"]) {
-                        cusSocksPort = [cusJson[@"inbound"][@"port"] integerValue];
-                    }
-                    NSLog(@"socks: %ld, http: %ld", cusSocksPort, cusHttpPort);
-                    arguments = @[@"global", [NSString stringWithFormat:@"%ld", cusSocksPort], [NSString stringWithFormat:@"%ld", cusHttpPort]];
-                }
-                
-                // tun mode
-                if(proxyMode == tunMode) {
                     
-                    if(!useCusProfile) {
-                        
-                        // Get the currently selected server
-                        NSDictionary* profile = profiles[selectedServerIndex];
+                    // Count all servers.
+                    for (NSDictionary *profile in profiles) {
                         if(profile != NULL && profile[@"settings"] != NULL && profile[@"settings"][@"vnext"] != NULL && [profile[@"settings"][@"vnext"] isKindOfClass:[NSArray class]]) {
                             for (NSDictionary *vnextItem in profile[@"settings"][@"vnext"]) {
-                                if(vnextItem[@"address"] != NULL) {
+                                if(vnextItem[@"address"] != NULL && ![serverAddress containsObject: vnextItem[@"address"]]) {
                                     [serverAddress addObject: vnextItem[@"address"]];
                                 }
                             }
                         }
-                        
-                        // Count all servers.
-                        for (NSDictionary *profile in profiles) {
-                            if(profile != NULL && profile[@"settings"] != NULL && profile[@"settings"][@"vnext"] != NULL && [profile[@"settings"][@"vnext"] isKindOfClass:[NSArray class]]) {
-                                for (NSDictionary *vnextItem in profile[@"settings"][@"vnext"]) {
-                                    if(vnextItem[@"address"] != NULL && ![serverAddress containsObject: vnextItem[@"address"]]) {
-                                        [serverAddress addObject: vnextItem[@"address"]];
-                                    }
-                                }
-                            }
-                        }
                     }
-                    
-                    if(serverAddress.count < 1) {
-                        [serverAddress addObject: @""];
-                    }
-                    arguments = @[@"tun", serverAddress[0], [NSString stringWithFormat:@"%ld", localPort]];
                 }
                 
+                if(serverAddress.count < 1) {
+                    [serverAddress addObject: @""];
+                }
+                arguments = @[@"tun", serverAddress[0], [NSString stringWithFormat:@"%ld", localPort]];
             }
+            
         }
+        
         dispatch_async(taskQueue, ^{
+            if(self.proxyMode == pacMode) {
+                // close system proxy first to refresh pac file
+                runCommandLine(kV2RayXHelper, @[@"off"]);
+            }
             runCommandLine(kV2RayXHelper,arguments);
         });
     } else {
-        ; // do nothing
+        dispatch_async(taskQueue, ^{
+            runCommandLine(kV2RayXHelper, @[@"off"]);
+        });
     }
     NSLog(@"system proxy state:%@,%ld",proxyState?@"on":@"off", (long)proxyMode);
 }
