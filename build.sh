@@ -52,6 +52,9 @@ else
         fi
 
         zip -r V2RayXS.app.zip V2RayXS.app && mkdir -p ../out/ && rsync -a V2RayXS.app.zip "../out/V2RayXS_${useArch}.app.zip"
+        md5sum "../out/V2RayXS_${useArch}.app.zip" | echo "MD5="$(cat) | cut -f1 -d" " >> "../out/V2RayXS_${useArch}.app.zip.dgst"
+        sha1sum "../out/V2RayXS_${useArch}.app.zip" | echo "SHA1="$(cat) | cut -f1 -d" " >> "../out/V2RayXS_${useArch}.app.zip.dgst"
+        sha256sum "../out/V2RayXS_${useArch}.app.zip" | echo "SHA2-256="$(cat) | cut -f1 -d" " >> "../out/V2RayXS_${useArch}.app.zip.dgst"
         echo -e "${GREEN}-- Packaging succeeded --${NORMAL}"
         cd ->/dev/null 2>&1
 

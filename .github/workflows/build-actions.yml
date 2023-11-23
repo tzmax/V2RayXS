@@ -32,4 +32,6 @@ jobs:
           append_body: true
           files: |
             build/out/V2RayXS_x86_64.app.zip
+            build/out/V2RayXS_x86_64.app.zip.dgst
             build/out/V2RayXS_arm64.app.zip
+            build/out/V2RayXS_arm64.app.zip.dgst
