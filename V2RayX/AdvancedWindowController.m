@@ -515,13 +515,13 @@
     NSString* tabTitle = _mainTabView.selectedTabViewItem.label;
 //    NSLog(@"%@", _mainTabView.selectedTabViewItem.label);
     if ([@"Rules" isEqualToString:tabTitle]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/document/level-1/routing-lv1-part1.html"]];
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/en/document/level-1/routing-lv1-part1.html"]];
     } else if ([@"Outbounds" isEqualToString:tabTitle]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/config/outbounds/"]];
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/en/config/outbounds/trojan.html"]];
     } else if ([@"Configs" isEqualToString:tabTitle]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/config/"]];
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/en/config/"]];
     } else if ([@"Core" isEqualToString:tabTitle]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/document/install.html"]];
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://xtls.github.io/en/document/install.html"]];
     } else {
         [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/tzmax/V2RayXS#readme"]];
     }
