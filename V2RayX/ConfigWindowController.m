@@ -80,8 +80,16 @@
     
     for (NSDictionary *p in _appDelegate.profiles) {
         // this old conditions is [@"vmess" isEqualToString:p[@"protocol"]] && [p[@"settings"][@"vnext"] count] == 1
-        NSLog(@"protocol: %@", p[@"protocol"]);
-        if (([@"vmess" isEqualToString:p[@"protocol"]] || [@"vless" isEqualToString:p[@"protocol"]]) && [p[@"settings"][@"vnext"] count] == 1) {
+        // NSLog(@"protocol: %@", p[@"protocol"]);
+        // add `x-ignore-node` field, avoid destroying the custom outbounds vless config
+        BOOL isIgnoreNode = NO;
+        if ([p objectForKey:@"x-ignore-node"]) {
+            isIgnoreNode = YES;
+        }
+        if (([@"vmess" isEqualToString:p[@"protocol"]] || [@"vless" isEqualToString:p[@"protocol"]]) &&
+            [p[@"settings"][@"vnext"] count] == 1 &&
+            !isIgnoreNode
+        ) {
             [_profiles addObject:[ServerProfile profilesFromJson:p][0]];
         } else {
             [_outbounds addObject:p];
