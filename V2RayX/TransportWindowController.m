@@ -125,13 +125,13 @@
     // reality
     NSDictionary* realitySettings = [streamSettings objectForKey:@"realitySettings"];
     if(realitySettings != nil) {
-        [_tlsServerNameField setStringValue:realitySettings[@"serverName"]];
+        [_tlsServerNameField setStringValue:nilCoalescing(realitySettings[@"serverName"], @"")];
         [_realityFingerprint setStringValue:nilCoalescing(realitySettings[@"fingerprint"], @"chrome")];
-        [_realityPubilcKey setStringValue:realitySettings[@"publicKey"]];
-        [_realityShortID setStringValue:realitySettings[@"shortId"]];
-        [_realitySpiderX setStringValue:realitySettings[@"spiderX"]];
+        [_realityPubilcKey setStringValue:nilCoalescing(realitySettings[@"publicKey"], @"")];
+        [_realityShortID setStringValue:nilCoalescing(realitySettings[@"shortId"], @"")];
+        [_realitySpiderX setStringValue:nilCoalescing(realitySettings[@"spiderX"], @"")];
     }
-    
+
     //xtls
     NSDictionary* xtlsSettings = [streamSettings objectForKey:@"xtlsSettings"];
     if ([streamSettings[@"security"] isEqualToString: @"xtls"]) {
