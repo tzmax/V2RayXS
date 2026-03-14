@@ -14,6 +14,7 @@
 #import "MutableDeepCopying.h"
 #import "ConfigImporter.h"
 #import "NSData+AES256Encryption.h"
+#import <sys/stat.h>
 
 #define kUseAllServer -10
 
@@ -248,14 +249,19 @@ static AppDelegate *appDelegate;
 
 - (BOOL)installHelper:(BOOL)force {
     NSFileManager *fileManager = [NSFileManager defaultManager];
-    if (!force && [fileManager fileExistsAtPath:kV2RayXHelper] && [self isSysconfVersionOK]) {
+    NSString* helperError = nil;
+    if (!force && [fileManager fileExistsAtPath:kV2RayXHelper] && [self helperBinaryIsHealthy:&helperError] && [self isSysconfVersionOK]) {
         // helper already installed
         return YES;
     }
     NSAlert *installAlert = [[NSAlert alloc] init];
     [installAlert addButtonWithTitle:@"Install"];
     [installAlert addButtonWithTitle:@"Quit"];
-    [installAlert setMessageText:@"V2RayXS needs to install a small tool to /Library/Application Support/V2RayXS/ with administrator privileges to set system proxy quickly.\nOtherwise you need to type in the administrator password every time you change system proxy through V2RayXS."];
+    NSString* installMessage = @"V2RayXS needs to install a small tool to /Library/Application Support/V2RayXS/ with administrator privileges to set system proxy quickly.\nOtherwise you need to type in the administrator password every time you change system proxy through V2RayXS.";
+    if (helperError.length > 0) {
+        installMessage = [installMessage stringByAppendingFormat:@"\n\nCurrent helper issue: %@", helperError];
+    }
+    [installAlert setMessageText:installMessage];
     if ([installAlert runModal] == NSAlertFirstButtonReturn) {
         NSLog(@"start install");
         NSString *helperPath = [NSString stringWithFormat:@"%@/%@", [[NSBundle mainBundle] resourcePath], @"install_helper.sh"];
@@ -275,6 +281,73 @@ static AppDelegate *appDelegate;
         // stopped by user
         return NO;
     }
+}
+
+- (BOOL)helperBinaryIsHealthy:(NSString**)errorMessage {
+    struct stat helperStat;
+    if (lstat([kV2RayXHelper fileSystemRepresentation], &helperStat) != 0) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"helper binary is missing";
+        }
+        return NO;
+    }
+
+    if (!S_ISREG(helperStat.st_mode)) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"helper path is not a regular file";
+        }
+        return NO;
+    }
+
+    if (helperStat.st_uid != 0) {
+        if (errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"helper owner is %u instead of root", helperStat.st_uid];
+        }
+        return NO;
+    }
+
+    if ((helperStat.st_mode & S_ISUID) == 0) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"helper is missing the setuid bit";
+        }
+        return NO;
+    }
+
+    if ((helperStat.st_mode & S_IXUSR) == 0) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"helper is not executable";
+        }
+        return NO;
+    }
+
+    return YES;
+}
+
+- (void)presentHelperFailureAlert:(NSString*)message {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSAlert* alert = [[NSAlert alloc] init];
+        alert.messageText = @"V2RayXS helper failed";
+        alert.informativeText = message;
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+    });
+}
+
+- (BOOL)runHelperCommand:(NSArray*)arguments action:(NSString*)action {
+    int exitCode = runCommandLine(kV2RayXHelper, arguments);
+    if (exitCode == 0) {
+        return YES;
+    }
+
+    NSString* helperError = nil;
+    [self helperBinaryIsHealthy:&helperError];
+    NSString* errorMessage = [NSString stringWithFormat:@"Helper command `%@` failed with exit code %d.", [arguments componentsJoinedByString:@" "], exitCode];
+    if (helperError.length > 0) {
+        errorMessage = [errorMessage stringByAppendingFormat:@"\n\nDetected helper issue: %@\nPlease reinstall the helper.", helperError];
+    }
+    NSLog(@"%@ (%@)", errorMessage, action);
+    [self presentHelperFailureAlert:errorMessage];
+    return NO;
 }
 
 - (BOOL)isSysconfVersionOK {
@@ -549,13 +622,13 @@ static AppDelegate *appDelegate;
 
 -(void)restoreSystemProxy {
     dispatch_async(taskQueue, ^{
-        runCommandLine(kV2RayXHelper,@[@"restore"]);
+        [self runHelperCommand:@[@"restore"] action:@"restore system proxy"];
     });
 }
 
 -(void)cancelSystemProxy {
     dispatch_async(taskQueue, ^{
-        runCommandLine(kV2RayXHelper,@[@"off"]);
+        [self runHelperCommand:@[@"off"] action:@"disable system proxy"];
     });
 }
 
@@ -781,13 +854,13 @@ static AppDelegate *appDelegate;
         dispatch_async(taskQueue, ^{
             if(self.proxyMode == pacMode) {
                 // close system proxy first to refresh pac file
-                runCommandLine(kV2RayXHelper, @[@"off"]);
+                [self runHelperCommand:@[@"off"] action:@"disable system proxy before PAC refresh"];
             }
-            runCommandLine(kV2RayXHelper,arguments);
+            [self runHelperCommand:arguments action:@"apply helper network settings"];
         });
     } else {
         dispatch_async(taskQueue, ^{
-            runCommandLine(kV2RayXHelper, @[@"off"]);
+            [self runHelperCommand:@[@"off"] action:@"disable system proxy"];
         });
     }
     NSLog(@"system proxy state:%@,%ld",proxyState?@"on":@"off", (long)proxyMode);
@@ -1131,7 +1204,7 @@ static AppDelegate *appDelegate;
 
 NSTask *helperApplicationTask;
 
-void closeHelperApplicationTask() {
+void closeHelperApplicationTask(void) {
     if(helperApplicationTask != NULL && [helperApplicationTask isRunning]) {
         // NSLog(@"tzmax: commTask terminate");
         [helperApplicationTask interrupt]; // push SIGINT signal, enable the helper to perform the cleanup task.

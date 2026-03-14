@@ -55,12 +55,145 @@ NSString* const ROUTE_BACKUP_STATE_SWITCHING = @"switching";
 NSString* const ROUTE_BACKUP_STATE_ACTIVE = @"active";
 NSString* const ROUTE_BACKUP_STATE_RESTORING = @"restoring";
 
+NSString* const V2RayXSAppSupportRelativePath = @"Library/Application Support/V2RayXS";
+NSString* const SystemRouteBackupFilename = @"system_route_backup.plist";
+NSString* const SystemProxyBackupFilename = @"system_proxy_backup.plist";
+
+NSString* appSupportPath(void) {
+    return [NSString stringWithFormat:@"%@/%@", NSHomeDirectory(), V2RayXSAppSupportRelativePath];
+}
+
+NSURL* appSupportFileURL(NSString* filename) {
+    if (filename == NULL || [filename isEqualToString:@""]) {
+        return NULL;
+    }
+    return [NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/%@", appSupportPath(), filename]];
+}
+
+BOOL setProxyFlag(NSMutableDictionary* proxies, NSString* key, BOOL enabled) {
+    if (proxies == NULL || key == NULL) {
+        return NO;
+    }
+    [proxies setObject:@(enabled) forKey:key];
+    return YES;
+}
+
+void disableManualProxySettings(NSMutableDictionary* proxies) {
+    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesHTTPEnable, NO);
+    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesHTTPSEnable, NO);
+    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesProxyAutoConfigEnable, NO);
+    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesSOCKSEnable, NO);
+}
+
 NSString* routeBackupFilePath(void) {
-    return [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_route_backup.plist", NSHomeDirectory()];
+    return [[appSupportFileURL(SystemRouteBackupFilename) path] copy];
+}
+
+NSURL* routeBackupFileURL(void) {
+    return [NSURL fileURLWithPath:routeBackupFilePath()];
+}
+
+NSURL* proxyBackupFileURL(void) {
+    return appSupportFileURL(SystemProxyBackupFilename);
+}
+
+BOOL saveProxyBackup(NSDictionary* sets) {
+    if (sets == NULL) {
+        return NO;
+    }
+    return [sets writeToURL:proxyBackupFileURL() atomically:NO];
+}
+
+NSDictionary* loadProxyBackup(void) {
+    return [NSDictionary dictionaryWithContentsOfURL:proxyBackupFileURL()];
+}
+
+BOOL isSupportedProxyHardware(NSString* hardware) {
+    return [hardware isEqualToString:@"AirPort"] || [hardware isEqualToString:@"Wi-Fi"] || [hardware isEqualToString:@"Ethernet"];
+}
+
+NSString* proxyPreferencePath(NSString* key) {
+    return [NSString stringWithFormat:@"/%@/%@/%@", kSCPrefNetworkServices, key, kSCEntNetProxies];
+}
+
+BOOL parseProxyPorts(const char* socksArg, const char* httpArg, int* localPort, int* httpPort) {
+    int parsedLocalPort = 0;
+    int parsedHttpPort = 0;
+    if (sscanf(socksArg, "%i", &parsedLocalPort) != 1 || parsedLocalPort > 65535 || parsedLocalPort < 0) {
+        printf("error - not a valid port number");
+        return NO;
+    }
+    if (sscanf(httpArg, "%i", &parsedHttpPort) != 1 || parsedHttpPort > 65535 || parsedHttpPort < 0) {
+        printf("error - not a valid port number");
+        return NO;
+    }
+    if (localPort != NULL) {
+        *localPort = parsedLocalPort;
+    }
+    if (httpPort != NULL) {
+        *httpPort = parsedHttpPort;
+    }
+    return YES;
+}
+
+void applyAutoProxySettings(NSMutableDictionary* proxies) {
+    [proxies setObject:@"http://127.0.0.1:8070/proxy.pac" forKey:(NSString *)kCFNetworkProxiesProxyAutoConfigURLString];
+    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesProxyAutoConfigEnable, YES);
+}
+
+void applyGlobalProxySettings(NSMutableDictionary* proxies, int localPort, int httpPort) {
+    NSLog(@"in helper %d %d", localPort, httpPort);
+    if (localPort > 0) {
+        [proxies setObject:@"127.0.0.1" forKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
+        [proxies setObject:@(localPort) forKey:(NSString*)kCFNetworkProxiesSOCKSPort];
+        setProxyFlag(proxies, (NSString*)kCFNetworkProxiesSOCKSEnable, YES);
+    }
+    if (httpPort > 0) {
+        [proxies setObject:@"127.0.0.1" forKey:(NSString *)kCFNetworkProxiesHTTPProxy];
+        [proxies setObject:@"127.0.0.1" forKey:(NSString *)kCFNetworkProxiesHTTPSProxy];
+        [proxies setObject:@(httpPort) forKey:(NSString*)kCFNetworkProxiesHTTPPort];
+        [proxies setObject:@(httpPort) forKey:(NSString*)kCFNetworkProxiesHTTPSPort];
+        setProxyFlag(proxies, (NSString*)kCFNetworkProxiesHTTPEnable, YES);
+        setProxyFlag(proxies, (NSString*)kCFNetworkProxiesHTTPSEnable, YES);
+    }
+}
+
+NSMutableDictionary* proxiesForMode(NSString* mode, NSString* key, NSDictionary* sets, NSDictionary* originalSets, int localPort, int httpPort) {
+    NSMutableDictionary* proxies = [sets[key][@"Proxies"] mutableCopy];
+    disableManualProxySettings(proxies);
+
+    if ([mode isEqualToString:@"restore"]) {
+        NSDictionary* originalProxySettings = originalSets[key][@"Proxies"];
+        if (originalProxySettings != NULL) {
+            return [originalProxySettings mutableCopy];
+        }
+        return proxies;
+    }
+
+    if ([mode isEqualToString:@"auto"]) {
+        applyAutoProxySettings(proxies);
+    } else if ([mode isEqualToString:@"global"]) {
+        applyGlobalProxySettings(proxies, localPort, httpPort);
+    }
+
+    return proxies;
+}
+
+void applyProxyModeToServices(SCPreferencesRef prefRef, NSDictionary* sets, NSString* mode, NSDictionary* originalSets, int localPort, int httpPort) {
+    for (NSString *key in [sets allKeys]) {
+        NSMutableDictionary *dict = [sets objectForKey:key];
+        NSString *hardware = [dict valueForKeyPath:@"Interface.Hardware"];
+        if (!isSupportedProxyHardware(hardware)) {
+            continue;
+        }
+
+        NSMutableDictionary* proxies = proxiesForMode(mode, key, sets, originalSets, localPort, httpPort);
+        SCPreferencesPathSetValue(prefRef, (__bridge CFStringRef)proxyPreferencePath(key), (__bridge CFDictionaryRef)proxies);
+    }
 }
 
 NSMutableDictionary* loadRouteBackup(void) {
-    NSMutableDictionary* backup = [NSMutableDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:routeBackupFilePath()]];
+    NSMutableDictionary* backup = [NSMutableDictionary dictionaryWithContentsOfURL:routeBackupFileURL()];
     if (backup == NULL) {
         backup = [[NSMutableDictionary alloc] init];
     }
@@ -80,7 +213,7 @@ NSMutableDictionary* loadRouteBackup(void) {
 }
 
 BOOL saveRouteBackup(NSMutableDictionary* backup) {
-    return [backup writeToURL:[NSURL fileURLWithPath:routeBackupFilePath()] atomically:NO];
+    return [backup writeToURL:routeBackupFileURL() atomically:NO];
 }
 
 void updateRouteBackupState(NSMutableDictionary* backup, NSString* state, NSString* gateway, NSString* proxy, NSString* tunName) {
@@ -332,79 +465,23 @@ int main(int argc, const char * argv[])
             SCPreferencesRef prefRef = SCPreferencesCreateWithAuthorization(nil, CFSTR("V2RayXS"), nil, authRef);
             
             NSDictionary *sets = (__bridge NSDictionary *)SCPreferencesGetValue(prefRef, kSCPrefNetworkServices);
-            
-            NSDictionary* originalSets;
+            NSDictionary* originalSets = nil;
+            int localPort = 0;
+            int httpPort = 0;
             if ([mode isEqualToString:@"save"]) {
-                [sets writeToURL:[NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_proxy_backup.plist",NSHomeDirectory()]] atomically:NO];
+                saveProxyBackup(sets);
                 return 0;
             }
-            
-            // 遍历系统中的网络设备列表，设置 AirPort 和 Ethernet 的代理
-            if([mode isEqualToString:@"restore"]) {
-                originalSets = [NSDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_proxy_backup.plist",NSHomeDirectory()]]];
-            }
-            for (NSString *key in [sets allKeys]) {
-                NSMutableDictionary *dict = [sets objectForKey:key];
-                NSString *hardware = [dict valueForKeyPath:@"Interface.Hardware"];
-                //        NSLog(@"%@", hardware);
-                if ([hardware isEqualToString:@"AirPort"] || [hardware isEqualToString:@"Wi-Fi"] || [hardware isEqualToString:@"Ethernet"]) {
-                    
-                    NSMutableDictionary *proxies = [sets[key][@"Proxies"] mutableCopy];
-                    [proxies setObject:[NSNumber numberWithInt:0] forKey:(NSString *)kCFNetworkProxiesHTTPEnable];
-                    [proxies setObject:[NSNumber numberWithInt:0] forKey:(NSString *)kCFNetworkProxiesHTTPSEnable];
-                    [proxies setObject:[NSNumber numberWithInt:0] forKey:(NSString *)kCFNetworkProxiesProxyAutoConfigEnable];
-                    [proxies setObject:[NSNumber numberWithInt:0] forKey:(NSString *)kCFNetworkProxiesSOCKSEnable];
-                    
-                    if ([mode isEqualToString:@"restore"]) {
-                        if ([originalSets objectForKey:key]){
-                            proxies = originalSets[key][@"Proxies"];
-                        }
-                    }
-                    
-                    if ([mode isEqualToString:@"auto"]) {
-                        
-                        [proxies setObject:@"http://127.0.0.1:8070/proxy.pac" forKey:(NSString *)kCFNetworkProxiesProxyAutoConfigURLString];
-                        [proxies setObject:[NSNumber numberWithInt:1] forKey:(NSString *)kCFNetworkProxiesProxyAutoConfigEnable];
-                        
-                    } else if ([mode isEqualToString:@"global"]) {
-                        int localPort = 0;
-                        int httpPort = 0;
-                        if (sscanf (argv[2], "%i", &localPort)!=1 || localPort > 65535 || localPort < 0) {
-                            printf ("error - not a valid port number");
-                            return 1;
-                        }
-                        if (sscanf (argv[3], "%i", &httpPort)!=1 || httpPort > 65535 || httpPort < 0) {
-                            printf ("error - not a valid port number");
-                            return 1;
-                        }
-                        NSLog(@"in helper %d %d", localPort, httpPort);
-                        if (localPort > 0) {
-                            [proxies setObject:@"127.0.0.1" forKey:(NSString *)
-                             kCFNetworkProxiesSOCKSProxy];
-                            [proxies setObject:[NSNumber numberWithInt:localPort] forKey:(NSString*)
-                             kCFNetworkProxiesSOCKSPort];
-                            [proxies setObject:[NSNumber numberWithInt:1] forKey:(NSString*)
-                             kCFNetworkProxiesSOCKSEnable];
-                        }
-                        if (httpPort > 0) {
-                            [proxies setObject:@"127.0.0.1" forKey:(NSString *)
-                             kCFNetworkProxiesHTTPProxy];
-                            [proxies setObject:@"127.0.0.1" forKey:(NSString *)
-                             kCFNetworkProxiesHTTPSProxy];
-                            [proxies setObject:[NSNumber numberWithInt:httpPort] forKey:(NSString*)
-                             kCFNetworkProxiesHTTPPort];
-                            [proxies setObject:[NSNumber numberWithInt:httpPort] forKey:(NSString*)
-                             kCFNetworkProxiesHTTPSPort];
-                            [proxies setObject:[NSNumber numberWithInt:1] forKey:(NSString*)
-                             kCFNetworkProxiesHTTPEnable];
-                            [proxies setObject:[NSNumber numberWithInt:1] forKey:(NSString*)
-                             kCFNetworkProxiesHTTPSEnable];
-                        }
-                    }
-                    
-                    SCPreferencesPathSetValue(prefRef, (__bridge CFStringRef)[NSString stringWithFormat:@"/%@/%@/%@", kSCPrefNetworkServices, key, kSCEntNetProxies], (__bridge CFDictionaryRef)proxies);
+
+            if ([mode isEqualToString:@"restore"]) {
+                originalSets = loadProxyBackup();
+            } else if ([mode isEqualToString:@"global"]) {
+                if (!parseProxyPorts(argv[2], argv[3], &localPort, &httpPort)) {
+                    return 1;
                 }
             }
+
+            applyProxyModeToServices(prefRef, sets, mode, originalSets, localPort, httpPort);
             
             SCPreferencesCommitChanges(prefRef);
             SCPreferencesApplyChanges(prefRef);

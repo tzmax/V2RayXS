@@ -70,6 +70,10 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 @property BOOL enableEncryption;
 @property NSString* encryptionKey;
 
+- (BOOL)helperBinaryIsHealthy:(NSString**)errorMessage;
+- (void)presentHelperFailureAlert:(NSString*)message;
+- (BOOL)runHelperCommand:(NSArray*)arguments action:(NSString*)action;
+
 - (IBAction)didChangeStatus:(id)sender;
 - (IBAction)updateSubscriptions:(id)sender;
 - (IBAction)showHelp:(id)sender;
@@ -103,4 +107,3 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 @property (weak) IBOutlet NSMenu *authMenu;
 
 @end
-
