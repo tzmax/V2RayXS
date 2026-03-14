@@ -73,6 +73,10 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 - (BOOL)helperBinaryIsHealthy:(NSString**)errorMessage;
 - (void)presentHelperFailureAlert:(NSString*)message;
 - (BOOL)runHelperCommand:(NSArray*)arguments action:(NSString*)action;
+- (BOOL)installHelperBinary:(NSString**)errorMessage;
+- (BOOL)helperBinaryAtPathIsHealthy:(NSString*)helperPath error:(NSString**)errorMessage;
+- (NSString*)helperVersionAtPath:(NSString*)helperPath error:(NSString**)errorMessage;
+- (BOOL)helperVersionAtPathMatchesCurrentVersion:(NSString*)helperPath error:(NSString**)errorMessage;
 
 - (IBAction)didChangeStatus:(id)sender;
 - (IBAction)updateSubscriptions:(id)sender;

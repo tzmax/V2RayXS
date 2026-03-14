@@ -32,6 +32,13 @@
     NSData* v2rayJSONconfig;
 }
 
+- (NSString*)helperInstallSourcePath;
+- (NSString*)shellEscapedArgument:(NSString*)argument;
+- (BOOL)installHelperBinary:(NSString**)errorMessage;
+- (BOOL)helperBinaryAtPathIsHealthy:(NSString*)helperPath error:(NSString**)errorMessage;
+- (NSString*)helperVersionAtPath:(NSString*)helperPath error:(NSString**)errorMessage;
+- (BOOL)helperVersionAtPathMatchesCurrentVersion:(NSString*)helperPath error:(NSString**)errorMessage;
+
 @end
 
 @implementation AppDelegate
@@ -264,17 +271,17 @@ static AppDelegate *appDelegate;
     [installAlert setMessageText:installMessage];
     if ([installAlert runModal] == NSAlertFirstButtonReturn) {
         NSLog(@"start install");
-        NSString *helperPath = [NSString stringWithFormat:@"%@/%@", [[NSBundle mainBundle] resourcePath], @"install_helper.sh"];
-        NSLog(@"run install script: %@", helperPath);
-        NSDictionary *error;
-        NSString *script = [NSString stringWithFormat:@"do shell script \"bash %@\" with administrator privileges", helperPath];
-        NSAppleScript *appleScript = [[NSAppleScript new] initWithSource:script];
-        if ([appleScript executeAndReturnError:&error]) {
+        if ([self installHelperBinary:&helperError]) {
             NSLog(@"installation success");
             return YES;
         } else {
-            NSLog(@"installation failure");
-            //unknown failure
+            NSLog(@"installation failure: %@", helperError);
+            if (helperError.length > 0) {
+                NSAlert *failureAlert = [[NSAlert alloc] init];
+                failureAlert.messageText = @"Failed to install V2RayXS helper";
+                failureAlert.informativeText = helperError;
+                [failureAlert runModal];
+            }
             return NO;
         }
     } else {
@@ -283,11 +290,78 @@ static AppDelegate *appDelegate;
     }
 }
 
-- (BOOL)helperBinaryIsHealthy:(NSString**)errorMessage {
-    struct stat helperStat;
-    if (lstat([kV2RayXHelper fileSystemRepresentation], &helperStat) != 0) {
+- (NSString*)helperInstallSourcePath {
+    return [NSString stringWithFormat:@"%@/%@", [[NSBundle mainBundle] resourcePath], @"v2rayx_sysconf"];
+}
+
+- (NSString*)shellEscapedArgument:(NSString*)argument {
+    NSString* escaped = [argument stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"];
+    return [NSString stringWithFormat:@"'%@'", escaped];
+}
+
+- (BOOL)installHelperBinary:(NSString**)errorMessage {
+    NSString* sourcePath = [self helperInstallSourcePath];
+    NSFileManager* fileManager = [NSFileManager defaultManager];
+    NSString* sourceError = nil;
+    if (![fileManager fileExistsAtPath:sourcePath]) {
         if (errorMessage != NULL) {
-            *errorMessage = @"helper binary is missing";
+            *errorMessage = [NSString stringWithFormat:@"Bundled helper is missing at %@", sourcePath];
+        }
+        return NO;
+    }
+    if (![self helperVersionAtPathMatchesCurrentVersion:sourcePath error:&sourceError]) {
+        if (errorMessage != NULL) {
+            *errorMessage = sourceError ?: @"Bundled helper version does not match the application";
+        }
+        return NO;
+    }
+
+    NSString* helperDirectory = [kV2RayXHelper stringByDeletingLastPathComponent];
+    NSString* tempHelperPath = [helperDirectory stringByAppendingPathComponent:[NSString stringWithFormat:@".%@.tmp", [kV2RayXHelper lastPathComponent]]];
+    NSString* escapedSource = [self shellEscapedArgument:sourcePath];
+    NSString* escapedDirectory = [self shellEscapedArgument:helperDirectory];
+    NSString* escapedDestination = [self shellEscapedArgument:kV2RayXHelper];
+    NSString* escapedTempPath = [self shellEscapedArgument:tempHelperPath];
+    NSString* installCommand = [NSString stringWithFormat:@"/bin/rm -f %@ && /bin/mkdir -p %@ && /usr/bin/install -o root -g admin -m 4755 %@ %@ && /bin/mv -f %@ %@", escapedTempPath, escapedDirectory, escapedSource, escapedTempPath, escapedTempPath, escapedDestination];
+    NSString* script = [NSString stringWithFormat:@"do shell script %@ with administrator privileges", [self shellEscapedArgument:installCommand]];
+
+    NSDictionary* appleScriptError = nil;
+    NSAppleScript* appleScript = [[NSAppleScript new] initWithSource:script];
+    if (![appleScript executeAndReturnError:&appleScriptError]) {
+        if (errorMessage != NULL) {
+            NSString* message = appleScriptError[NSAppleScriptErrorMessage] ?: @"Unknown installation error";
+            *errorMessage = message;
+        }
+        return NO;
+    }
+
+    NSString* helperError = nil;
+    if (![self helperBinaryIsHealthy:&helperError]) {
+        if (errorMessage != NULL) {
+            *errorMessage = helperError ?: @"Installed helper did not pass validation";
+        }
+        return NO;
+    }
+
+    if (![self helperVersionAtPathMatchesCurrentVersion:kV2RayXHelper error:&helperError]) {
+        if (errorMessage != NULL) {
+            *errorMessage = helperError ?: @"Installed helper version does not match the application bundle";
+        }
+        return NO;
+    }
+
+    return YES;
+}
+
+- (BOOL)helperBinaryIsHealthy:(NSString**)errorMessage {
+    return [self helperBinaryAtPathIsHealthy:kV2RayXHelper error:errorMessage];
+}
+
+- (BOOL)helperBinaryAtPathIsHealthy:(NSString*)helperPath error:(NSString**)errorMessage {
+    struct stat helperStat;
+    if (lstat([helperPath fileSystemRepresentation], &helperStat) != 0) {
+        if (errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"helper binary is missing at %@", helperPath];
         }
         return NO;
     }
@@ -323,6 +397,64 @@ static AppDelegate *appDelegate;
     return YES;
 }
 
+- (NSString*)helperVersionAtPath:(NSString*)helperPath error:(NSString**)errorMessage {
+    NSTask* task = [[NSTask alloc] init];
+    if (@available(macOS 10.13, *)) {
+        [task setExecutableURL:[NSURL fileURLWithPath:helperPath]];
+    } else {
+        [task setLaunchPath:helperPath];
+    }
+    [task setArguments:@[@"-v"]];
+
+    NSPipe* stdoutPipe = [NSPipe pipe];
+    NSPipe* stderrPipe = [NSPipe pipe];
+    [task setStandardOutput:stdoutPipe];
+    [task setStandardError:stderrPipe];
+
+    @try {
+        [task launch];
+    } @catch (NSException *exception) {
+        if (errorMessage != NULL) {
+            *errorMessage = exception.reason ?: @"Failed to launch helper for version check";
+        }
+        return nil;
+    }
+
+    NSData* stdoutData = [[stdoutPipe fileHandleForReading] readDataToEndOfFile];
+    NSData* stderrData = [[stderrPipe fileHandleForReading] readDataToEndOfFile];
+    [task waitUntilExit];
+
+    NSString* stdoutString = [[NSString alloc] initWithData:stdoutData encoding:NSUTF8StringEncoding] ?: @"";
+    NSString* stderrString = [[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] ?: @"";
+    if ([task terminationStatus] != 0) {
+        if (errorMessage != NULL) {
+            NSString* trimmedStderr = [stderrString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if ([trimmedStderr isEqualToString:@""]) {
+                trimmedStderr = [NSString stringWithFormat:@"helper exited with code %d", [task terminationStatus]];
+            }
+            *errorMessage = trimmedStderr;
+        }
+        return nil;
+    }
+
+    return stdoutString;
+}
+
+- (BOOL)helperVersionAtPathMatchesCurrentVersion:(NSString*)helperPath error:(NSString**)errorMessage {
+    NSString* helperVersion = [self helperVersionAtPath:helperPath error:errorMessage];
+    if (helperVersion == nil) {
+        return NO;
+    }
+    if (![helperVersion isEqualToString:VERSION]) {
+        if (errorMessage != NULL) {
+            NSString* trimmedVersion = [helperVersion stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            *errorMessage = [NSString stringWithFormat:@"helper version mismatch at %@: expected `%@`, got `%@`", helperPath, VERSION, trimmedVersion];
+        }
+        return NO;
+    }
+    return YES;
+}
+
 - (void)presentHelperFailureAlert:(NSString*)message {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSAlert* alert = [[NSAlert alloc] init];
@@ -351,37 +483,7 @@ static AppDelegate *appDelegate;
 }
 
 - (BOOL)isSysconfVersionOK {
-    NSTask *task;
-    task = [[NSTask alloc] init];
-    if (@available(macOS 10.13, *)) {
-        [task setExecutableURL:[NSURL fileURLWithPath:kV2RayXHelper]];
-    } else {
-        [task setLaunchPath:kV2RayXHelper];
-    }
-    
-    NSArray *args;
-    args = [NSArray arrayWithObjects:@"-v", nil];
-    [task setArguments: args];
-    
-    NSPipe *pipe;
-    pipe = [NSPipe pipe];
-    [task setStandardOutput:pipe];
-    
-    NSFileHandle *fd;
-    fd = [pipe fileHandleForReading];
-    
-    [task launch];
-    
-    NSData *data;
-    data = [fd readDataToEndOfFile];
-    
-    NSString *str;
-    str = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    
-    if (![str isEqualToString:VERSION]) {
-        return NO;
-    }
-    return YES;
+    return [self helperVersionAtPathMatchesCurrentVersion:kV2RayXHelper error:nil];
 }
 
 - (IBAction)openReleasePage:(id)sender {
