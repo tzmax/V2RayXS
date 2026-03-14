@@ -9,17 +9,23 @@
 #ifndef route_h
 #define route_h
 
+#import <Foundation/Foundation.h>
+
 @interface SYSRouteHelper : NSObject {}
 
 -(NSString*) getRouteGateway:(NSString*) rule;
 
 -(NSString*) getDefaultRouteGateway;
 
--(void) upInterface:(NSString*) interfaceName;
+-(BOOL) isValidGateway:(NSString*) gateway;
 
--(void) routeAdd:(NSString*) rule gateway:(NSString*) gateway;
+-(BOOL) hasRoute:(NSString*) rule gateway:(NSString*) gateway;
 
--(void) routeDelete:(NSString*) rule gateway:(NSString*) gateway;
+-(BOOL) upInterface:(NSString*) interfaceName;
+
+-(BOOL) routeAdd:(NSString*) rule gateway:(NSString*) gateway;
+
+-(BOOL) routeDelete:(NSString*) rule gateway:(NSString*) gateway;
 
 @end
 

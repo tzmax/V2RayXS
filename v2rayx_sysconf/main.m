@@ -33,6 +33,9 @@
 BOOL runLoopMark = YES;
 
 NSString* defaultRouteGateway;
+NSString* activeProxyServer;
+BOOL didAddProxyRoute = NO;
+BOOL didSwitchDefaultRouteToTun = NO;
 
 SYSRouteHelper* routeHelper;
 NSString* tunAddr = @"10.0.0.0";
@@ -43,6 +46,94 @@ NSString* proxyServer;
 NSString* exampleServer = @"93.184.216.34"; // example.com ip use to identify records
 NSString *runtimeMode = @"";
 
+NSString* const ROUTE_BACKUP_DEFAULT_GATEWAY_KEY = @"DefaultRouteGateway";
+NSString* const ROUTE_BACKUP_PROXY_SERVER_KEY = @"ProxyServer";
+NSString* const ROUTE_BACKUP_TUN_NAME_KEY = @"TunName";
+NSString* const ROUTE_BACKUP_STATE_KEY = @"RouteState";
+NSString* const ROUTE_BACKUP_STATE_IDLE = @"idle";
+NSString* const ROUTE_BACKUP_STATE_SWITCHING = @"switching";
+NSString* const ROUTE_BACKUP_STATE_ACTIVE = @"active";
+NSString* const ROUTE_BACKUP_STATE_RESTORING = @"restoring";
+
+NSString* routeBackupFilePath(void) {
+    return [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_route_backup.plist", NSHomeDirectory()];
+}
+
+NSMutableDictionary* loadRouteBackup(void) {
+    NSMutableDictionary* backup = [NSMutableDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:routeBackupFilePath()]];
+    if (backup == NULL) {
+        backup = [[NSMutableDictionary alloc] init];
+    }
+    if (![backup objectForKey:ROUTE_BACKUP_DEFAULT_GATEWAY_KEY]) {
+        [backup setValue:@"" forKey:ROUTE_BACKUP_DEFAULT_GATEWAY_KEY];
+    }
+    if (![backup objectForKey:ROUTE_BACKUP_PROXY_SERVER_KEY]) {
+        [backup setValue:@"" forKey:ROUTE_BACKUP_PROXY_SERVER_KEY];
+    }
+    if (![backup objectForKey:ROUTE_BACKUP_TUN_NAME_KEY]) {
+        [backup setValue:@"" forKey:ROUTE_BACKUP_TUN_NAME_KEY];
+    }
+    if (![backup objectForKey:ROUTE_BACKUP_STATE_KEY]) {
+        [backup setValue:ROUTE_BACKUP_STATE_IDLE forKey:ROUTE_BACKUP_STATE_KEY];
+    }
+    return backup;
+}
+
+BOOL saveRouteBackup(NSMutableDictionary* backup) {
+    return [backup writeToURL:[NSURL fileURLWithPath:routeBackupFilePath()] atomically:NO];
+}
+
+void updateRouteBackupState(NSMutableDictionary* backup, NSString* state, NSString* gateway, NSString* proxy, NSString* tunName) {
+    if (backup == NULL) {
+        return;
+    }
+    [backup setValue:(state ?: ROUTE_BACKUP_STATE_IDLE) forKey:ROUTE_BACKUP_STATE_KEY];
+    [backup setValue:(gateway ?: @"") forKey:ROUTE_BACKUP_DEFAULT_GATEWAY_KEY];
+    [backup setValue:(proxy ?: @"") forKey:ROUTE_BACKUP_PROXY_SERVER_KEY];
+    [backup setValue:(tunName ?: @"") forKey:ROUTE_BACKUP_TUN_NAME_KEY];
+    saveRouteBackup(backup);
+}
+
+BOOL restoreDefaultRouting(void) {
+    if (routeHelper == NULL || defaultRouteGateway == NULL || [defaultRouteGateway isEqualToString:@""]) {
+        return YES;
+    }
+
+    BOOL ok = YES;
+    if (didSwitchDefaultRouteToTun || [routeHelper hasRoute:@"default" gateway:tunWg]) {
+        ok = [routeHelper routeDelete:@"default" gateway:tunWg] && ok;
+    }
+    ok = [routeHelper routeAdd:@"default" gateway:defaultRouteGateway] && ok;
+
+    if ((didAddProxyRoute || (activeProxyServer != NULL && ![activeProxyServer isEqualToString:@""])) && activeProxyServer != NULL) {
+        ok = [routeHelper routeDelete:activeProxyServer gateway:defaultRouteGateway] && ok;
+    }
+
+    if (ok) {
+        didAddProxyRoute = NO;
+        didSwitchDefaultRouteToTun = NO;
+    }
+
+    return ok;
+}
+
+BOOL restoreDefaultRoutingAndPersist(NSMutableDictionary* routeBackup) {
+    if (routeBackup != NULL) {
+        updateRouteBackupState(routeBackup, ROUTE_BACKUP_STATE_RESTORING, defaultRouteGateway, activeProxyServer, routeBackup[ROUTE_BACKUP_TUN_NAME_KEY]);
+    }
+
+    BOOL ok = restoreDefaultRouting();
+    if (routeBackup != NULL) {
+        if (ok) {
+            updateRouteBackupState(routeBackup, ROUTE_BACKUP_STATE_IDLE, defaultRouteGateway, @"", @"");
+        } else {
+            saveRouteBackup(routeBackup);
+        }
+    }
+
+    return ok;
+}
+
 // helper perform the cleanup task.
 void cleanupHandle(int signal_ns) {
     // printf("app kill signal %d\n", signal_ns);
@@ -50,10 +141,12 @@ void cleanupHandle(int signal_ns) {
     if ([runtimeMode isEqualToString: @"tun"]) {
         // Restore the default route
         if (![defaultRouteGateway isEqualToString:@""] && routeHelper != NULL) {
-            [routeHelper routeDelete:@"default" gateway:tunWg];
-            [routeHelper routeAdd:@"default" gateway:defaultRouteGateway];
-            [routeHelper routeDelete:proxyServer gateway:defaultRouteGateway];
-            printf("reset DefaultRouteGateway %s\n", [defaultRouteGateway UTF8String]);
+            NSMutableDictionary* routeBackup = loadRouteBackup();
+            if (restoreDefaultRoutingAndPersist(routeBackup)) {
+                printf("reset DefaultRouteGateway %s\n", [defaultRouteGateway UTF8String]);
+            } else {
+                NSLog(@"Failed to fully restore default routing to %@", defaultRouteGateway);
+            }
         }
     }
     
@@ -104,6 +197,7 @@ int main(int argc, const char * argv[])
                     proxyServer = server;
                 }
             }
+            activeProxyServer = proxyServer;
             
             int localProxyPort = 0;
             if (sscanf (argv[3], "%i", &localProxyPort) != 1 || localProxyPort > 65535 || localProxyPort < 0) {
@@ -127,18 +221,12 @@ int main(int argc, const char * argv[])
                 // NSLog(@"tun fd is %@\n", ctl.tunName);
                 
                 // Process route
-                NSString* systemRouteBackupFilePath = [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/system_route_backup.plist", NSHomeDirectory()];
-                NSMutableDictionary* systemRouteBackup = [NSMutableDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath: systemRouteBackupFilePath]];
-                NSString* DEFAULT_ROUTE_GATEWAY = @"DefaultRouteGateway";
-                if (systemRouteBackup == NULL) {
-                    systemRouteBackup = [[NSMutableDictionary alloc] init];
-                }
-                if (![systemRouteBackup objectForKey:DEFAULT_ROUTE_GATEWAY]) {
-                    [systemRouteBackup setValue:@"" forKey:DEFAULT_ROUTE_GATEWAY];
-                }
+                NSMutableDictionary* systemRouteBackup = loadRouteBackup();
                 
                 NSString* defGateway = [routeHelper getDefaultRouteGateway];
-                NSString* fixGateway = systemRouteBackup[DEFAULT_ROUTE_GATEWAY];
+                NSString* fixGateway = systemRouteBackup[ROUTE_BACKUP_DEFAULT_GATEWAY_KEY];
+                NSString* backupState = systemRouteBackup[ROUTE_BACKUP_STATE_KEY];
+                NSString* backupProxyServer = systemRouteBackup[ROUTE_BACKUP_PROXY_SERVER_KEY];
                 // NSString* fixGateway = [routeHelper getRouteGateway: exampleServer];
             
                 // printf("defGateway %s\n", [defGateway UTF8String]);
@@ -147,11 +235,17 @@ int main(int argc, const char * argv[])
                 if ([defGateway isEqualToString:@""] && ![fixGateway isEqualToString:@""]) {
                     defGateway = fixGateway;
                 }
+
+                if (![fixGateway isEqualToString:@""] && ([defGateway isEqualToString:tunWg] || ![backupState isEqualToString:ROUTE_BACKUP_STATE_IDLE])) {
+                    NSLog(@"Detected stale route backup state %@, trying to restore %@ first", backupState, fixGateway);
+                    defaultRouteGateway = fixGateway;
+                    activeProxyServer = [backupProxyServer isEqualToString:@""] ? proxyServer : backupProxyServer;
+                    restoreDefaultRoutingAndPersist(systemRouteBackup);
+                    defGateway = [routeHelper getDefaultRouteGateway];
+                }
                 
                 if(![defGateway isEqualToString:@""] && ([fixGateway isEqualToString:@""] || ![defGateway isEqualToString:fixGateway])) {
                     fixGateway = defGateway;
-                    [systemRouteBackup setValue:fixGateway forKey:DEFAULT_ROUTE_GATEWAY];
-                    [systemRouteBackup writeToURL:[NSURL fileURLWithPath: systemRouteBackupFilePath] atomically:NO];
                 }
                 
 //                if(![defGateway isEqualToString:@""] && [fixGateway isEqualToString:@""]) {
@@ -162,18 +256,47 @@ int main(int argc, const char * argv[])
 //                    [routeHelper routeDelete:exampleServer gateway:defGateway];
 //                    [routeHelper routeAdd:exampleServer gateway:defGateway];
 //                }
-                
-                defaultRouteGateway = defGateway;
-                
-                [routeHelper upInterface: ctl.tunName]; // up tun Interface
-                
-                if (![defaultRouteGateway isEqualToString:@""]) {
-                    [routeHelper routeDelete:@"default" gateway:defaultRouteGateway];
-                    [routeHelper routeAdd:proxyServer gateway:defaultRouteGateway];
+                 
+                 defaultRouteGateway = defGateway;
+                if (![routeHelper isValidGateway:defaultRouteGateway]) {
+                    NSLog(@"Invalid default route gateway: %@", defaultRouteGateway);
+                    return 1;
                 }
-                
-                [routeHelper routeAdd:@"default" gateway:tunWg];
-            }
+
+                updateRouteBackupState(systemRouteBackup, ROUTE_BACKUP_STATE_SWITCHING, defaultRouteGateway, proxyServer, ctl.tunName);
+                  
+                  if (![routeHelper upInterface: ctl.tunName]) {
+                    updateRouteBackupState(systemRouteBackup, ROUTE_BACKUP_STATE_IDLE, defaultRouteGateway, @"", @"");
+                    NSLog(@"Failed to bring up tun interface %@", ctl.tunName);
+                    return 1;
+                  }
+                 
+                 if (![defaultRouteGateway isEqualToString:@""]) {
+                     didAddProxyRoute = [routeHelper routeAdd:proxyServer gateway:defaultRouteGateway];
+                     if (!didAddProxyRoute) {
+                         updateRouteBackupState(systemRouteBackup, ROUTE_BACKUP_STATE_IDLE, defaultRouteGateway, @"", @"");
+                         NSLog(@"Failed to preserve direct route to proxy server %@ via %@", proxyServer, defaultRouteGateway);
+                         return 1;
+                     }
+
+                     if (![routeHelper routeDelete:@"default" gateway:defaultRouteGateway]) {
+                         [routeHelper routeDelete:proxyServer gateway:defaultRouteGateway];
+                         didAddProxyRoute = NO;
+                         updateRouteBackupState(systemRouteBackup, ROUTE_BACKUP_STATE_IDLE, defaultRouteGateway, @"", @"");
+                         NSLog(@"Failed to remove default route via %@", defaultRouteGateway);
+                         return 1;
+                     }
+                 }
+
+                  didSwitchDefaultRouteToTun = [routeHelper routeAdd:@"default" gateway:tunWg];
+                  if (!didSwitchDefaultRouteToTun || ![routeHelper hasRoute:@"default" gateway:tunWg]) {
+                      NSLog(@"Failed to switch default route to tun gateway %@, rolling back", tunWg);
+                      restoreDefaultRoutingAndPersist(systemRouteBackup);
+                      return 1;
+                  }
+
+                  updateRouteBackupState(systemRouteBackup, ROUTE_BACKUP_STATE_ACTIVE, defaultRouteGateway, proxyServer, ctl.tunName);
+              }
 
             // run loop
             CFRunLoopSourceContext context = {0};

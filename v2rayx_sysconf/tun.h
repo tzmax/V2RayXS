@@ -9,6 +9,6 @@
 #ifndef tun_h
 #define tun_h
 
-int createTUN();
+int createTUN(void);
 
 #endif /* tun_h */

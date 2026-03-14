@@ -25,7 +25,7 @@
 #define UTUN_CONTROL_NAME "com.apple.net.utun_control"
 
 
-int createTUN () {
+int createTUN(void) {
     
     uint32_t ifIndex  = -1;
     int fd;

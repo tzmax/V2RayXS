@@ -7,42 +7,89 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <arpa/inet.h>
 #import "route.h"
 
+static NSString* escapeShellArgument(NSString* value);
+static NSString* runCommandScript(NSString* script, NSDictionary** errorInfo);
+static BOOL commandSucceeded(NSDictionary* errorInfo);
 
 @implementation SYSRouteHelper : NSObject
 
 
--(void) upInterface:(NSString*) interfaceName {
+-(BOOL) upInterface:(NSString*) interfaceName {
     if (interfaceName == NULL) {
-        return;
+        return NO;
     }
-    NSString* cmd = [[NSString alloc] initWithFormat: @"/sbin/ifconfig %@ up", interfaceName];
-    runCommandScript(cmd);
+    NSString* escapedInterfaceName = escapeShellArgument(interfaceName);
+    NSString* cmd = [[NSString alloc] initWithFormat: @"/sbin/ifconfig %@ up", escapedInterfaceName];
+    NSDictionary* errorInfo = nil;
+    runCommandScript(cmd, &errorInfo);
+    if (!commandSucceeded(errorInfo)) {
+        NSLog(@"Failed to bring up interface %@: %@", interfaceName, errorInfo);
+        return NO;
+    }
+
+    return YES;
 }
 
--(void) routeAdd:(NSString*) rule gateway:(NSString*) gateway {
+-(BOOL) routeAdd:(NSString*) rule gateway:(NSString*) gateway {
     if (rule == NULL || gateway == NULL) {
-        return;
+        return NO;
     }
-    NSString* cmd = [[NSString alloc] initWithFormat: @"/sbin/route add -net %@ %@", rule, gateway];
-    runCommandScript(cmd);
+    if (![self isValidGateway:gateway]) {
+        NSLog(@"Skip adding route %@ with invalid gateway %@", rule, gateway);
+        return NO;
+    }
+    if ([self hasRoute:rule gateway:gateway]) {
+        return YES;
+    }
+
+    NSString* escapedRule = escapeShellArgument(rule);
+    NSString* escapedGateway = escapeShellArgument(gateway);
+    NSString* cmd = [[NSString alloc] initWithFormat: @"/sbin/route add -net %@ %@", escapedRule, escapedGateway];
+    NSDictionary* errorInfo = nil;
+    runCommandScript(cmd, &errorInfo);
+    if (!commandSucceeded(errorInfo) && ![self hasRoute:rule gateway:gateway]) {
+        NSLog(@"Failed to add route %@ via %@: %@", rule, gateway, errorInfo);
+        return NO;
+    }
+
+    return YES;
 }
 
--(void) routeDelete:(NSString*) rule gateway:(NSString*) gateway {
+-(BOOL) routeDelete:(NSString*) rule gateway:(NSString*) gateway {
     if (rule == NULL || gateway == NULL) {
-        return;
+        return NO;
     }
-    NSString* cmd = [[NSString alloc] initWithFormat: @"/sbin/route delete -net %@ %@", rule, gateway];
-    runCommandScript(cmd);
+    if (![self hasRoute:rule gateway:gateway]) {
+        return YES;
+    }
+
+    NSString* escapedRule = escapeShellArgument(rule);
+    NSString* escapedGateway = escapeShellArgument(gateway);
+    NSString* cmd = [[NSString alloc] initWithFormat: @"/sbin/route delete -net %@ %@", escapedRule, escapedGateway];
+    NSDictionary* errorInfo = nil;
+    runCommandScript(cmd, &errorInfo);
+    if (!commandSucceeded(errorInfo) && [self hasRoute:rule gateway:gateway]) {
+        NSLog(@"Failed to delete route %@ via %@: %@", rule, gateway, errorInfo);
+        return NO;
+    }
+
+    return YES;
 }
 
 -(NSString*) getRouteGateway:(NSString*) rule {
     if (rule == NULL) {
         rule = @"default";
     }
-    NSString* cmd = [[NSString alloc] initWithFormat: @"/sbin/route -n get %@ | /usr/bin/grep 'gateway' | /usr/bin/awk '{print $2}'", rule];
-    NSString* outStr = [runCommandScript(cmd) stringByTrimmingCharactersInSet: [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString* escapedRule = escapeShellArgument(rule);
+    NSString* cmd = [[NSString alloc] initWithFormat: @"/sbin/route -n get %@ | /usr/bin/grep 'gateway' | /usr/bin/awk '{print $2}'", escapedRule];
+    NSDictionary* errorInfo = nil;
+    NSString* outStr = [runCommandScript(cmd, &errorInfo) stringByTrimmingCharactersInSet: [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!commandSucceeded(errorInfo) && ![outStr isEqualToString:@""]) {
+        NSLog(@"Route lookup for %@ returned output with error: %@", rule, errorInfo);
+    }
     return outStr;
 }
 
@@ -50,24 +97,62 @@
     return [self getRouteGateway:@"default"];
 }
 
-NSString* runCommandScript(NSString* script)
+-(BOOL) isValidGateway:(NSString*) gateway {
+    if (gateway == NULL) {
+        return NO;
+    }
+
+    NSString* trimmedGateway = [gateway stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([trimmedGateway isEqualToString:@""]) {
+        return NO;
+    }
+
+    struct in_addr ipv4Addr;
+    struct in6_addr ipv6Addr;
+    return inet_pton(AF_INET, [trimmedGateway UTF8String], &ipv4Addr) == 1 || inet_pton(AF_INET6, [trimmedGateway UTF8String], &ipv6Addr) == 1;
+}
+
+-(BOOL) hasRoute:(NSString*) rule gateway:(NSString*) gateway {
+    if (rule == NULL || gateway == NULL) {
+        return NO;
+    }
+
+    NSString* currentGateway = [self getRouteGateway:rule];
+    return currentGateway != NULL && [currentGateway isEqualToString:gateway];
+}
+
+static NSString* escapeShellArgument(NSString* value)
 {
-    
-    NSString *scriptSource = [NSString stringWithFormat:@"do shell script \"%@\" with administrator privileges", script];
+    NSString* escapedValue = [value stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escapedValue = [escapedValue stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    return [NSString stringWithFormat:@"\"%@\"", escapedValue];
+}
+
+static BOOL commandSucceeded(NSDictionary* errorInfo)
+{
+    return errorInfo == nil;
+}
+
+static NSString* runCommandScript(NSString* script, NSDictionary** errorInfo)
+{
+    NSString* escapedScript = [script stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escapedScript = [escapedScript stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    NSString *scriptSource = [NSString stringWithFormat:@"do shell script \"%@\" with administrator privileges", escapedScript];
     NSAppleScript *appleScript = [[NSAppleScript new] initWithSource:scriptSource];
-    
+
     NSAppleEventDescriptor *eventDescriptor = nil;
-    NSBundle *bunlde = [NSBundle mainBundle];
-    eventDescriptor = [appleScript executeAndReturnError:nil];
+    NSDictionary* executeErrorInfo = nil;
+    eventDescriptor = [appleScript executeAndReturnError:&executeErrorInfo];
+    if (errorInfo != NULL) {
+        *errorInfo = executeErrorInfo;
+    }
     if (eventDescriptor)
     {
         return [eventDescriptor stringValue];
     }
     
     return @"";
-    
-    
-   
+
 //    NSLog(@"runCommandScript: %@", script);
 //    NSPipe* pipe = [NSPipe pipe];
 //    NSTask* task = [[NSTask alloc] init];
@@ -83,4 +168,3 @@ NSString* runCommandScript(NSString* script)
 
 
 @end
-
