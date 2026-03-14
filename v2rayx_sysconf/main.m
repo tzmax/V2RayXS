@@ -74,7 +74,7 @@ BOOL setProxyFlag(NSMutableDictionary* proxies, NSString* key, BOOL enabled) {
     if (proxies == NULL || key == NULL) {
         return NO;
     }
-    [proxies setObject:@(enabled) forKey:key];
+    [proxies setObject:[NSNumber numberWithInt:(enabled ? 1 : 0)] forKey:key];
     return YES;
 }
 
@@ -82,7 +82,9 @@ void disableManualProxySettings(NSMutableDictionary* proxies) {
     setProxyFlag(proxies, (NSString *)kCFNetworkProxiesHTTPEnable, NO);
     setProxyFlag(proxies, (NSString *)kCFNetworkProxiesHTTPSEnable, NO);
     setProxyFlag(proxies, (NSString *)kCFNetworkProxiesProxyAutoConfigEnable, NO);
+    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesProxyAutoDiscoveryEnable, NO);
     setProxyFlag(proxies, (NSString *)kCFNetworkProxiesSOCKSEnable, NO);
+    [proxies setObject:@"" forKey:(NSString *)kCFNetworkProxiesProxyAutoConfigURLString];
 }
 
 NSString* routeBackupFilePath(void) {
@@ -108,12 +110,22 @@ NSDictionary* loadProxyBackup(void) {
     return [NSDictionary dictionaryWithContentsOfURL:proxyBackupFileURL()];
 }
 
-BOOL isSupportedProxyHardware(NSString* hardware) {
-    return [hardware isEqualToString:@"AirPort"] || [hardware isEqualToString:@"Wi-Fi"] || [hardware isEqualToString:@"Ethernet"];
-}
+BOOL isConfigurableProxyService(NSDictionary* service) {
+    if (service == NULL || ![service isKindOfClass:[NSDictionary class]]) {
+        return NO;
+    }
 
-NSString* proxyPreferencePath(NSString* key) {
-    return [NSString stringWithFormat:@"/%@/%@/%@", kSCPrefNetworkServices, key, kSCEntNetProxies];
+    NSDictionary* proxies = service[@"Proxies"];
+    if (proxies == NULL || ![proxies isKindOfClass:[NSDictionary class]]) {
+        return NO;
+    }
+
+    NSString* serviceUserDefinedName = service[@"UserDefinedName"];
+    if ([serviceUserDefinedName isEqualToString:@"V2RayXS"] || [serviceUserDefinedName isEqualToString:@"V2RayX"]) {
+        return NO;
+    }
+
+    return YES;
 }
 
 BOOL parseProxyPorts(const char* socksArg, const char* httpArg, int* localPort, int* httpPort) {
@@ -134,6 +146,22 @@ BOOL parseProxyPorts(const char* socksArg, const char* httpArg, int* localPort, 
         *httpPort = parsedHttpPort;
     }
     return YES;
+}
+
+BOOL validateModeArguments(NSString* mode, int argc) {
+    if (mode == NULL) {
+        return NO;
+    }
+
+    if ([mode isEqualToString:@"-v"] || [mode isEqualToString:@"off"] || [mode isEqualToString:@"auto"] || [mode isEqualToString:@"save"] || [mode isEqualToString:@"restore"]) {
+        return argc == 2;
+    }
+
+    if ([mode isEqualToString:@"global"] || [mode isEqualToString:@"tun"]) {
+        return argc == 4;
+    }
+
+    return NO;
 }
 
 void applyAutoProxySettings(NSMutableDictionary* proxies) {
@@ -158,12 +186,34 @@ void applyGlobalProxySettings(NSMutableDictionary* proxies, int localPort, int h
     }
 }
 
-NSMutableDictionary* proxiesForMode(NSString* mode, NSString* key, NSDictionary* sets, NSDictionary* originalSets, int localPort, int httpPort) {
-    NSMutableDictionary* proxies = [sets[key][@"Proxies"] mutableCopy];
+void cleanupInactiveProxySettings(NSMutableDictionary* proxies, NSString* mode) {
+    if (proxies == NULL) {
+        return;
+    }
+
+    if (![mode isEqualToString:@"auto"]) {
+        [proxies setObject:@"" forKey:(NSString *)kCFNetworkProxiesProxyAutoConfigURLString];
+    }
+
+    if (![mode isEqualToString:@"global"]) {
+        [proxies setObject:@"" forKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
+        [proxies setObject:@0 forKey:(NSString *)kCFNetworkProxiesSOCKSPort];
+        [proxies setObject:@"" forKey:(NSString *)kCFNetworkProxiesHTTPProxy];
+        [proxies setObject:@"" forKey:(NSString *)kCFNetworkProxiesHTTPSProxy];
+        [proxies setObject:@0 forKey:(NSString *)kCFNetworkProxiesHTTPPort];
+        [proxies setObject:@0 forKey:(NSString *)kCFNetworkProxiesHTTPSPort];
+    }
+}
+
+NSMutableDictionary* proxiesForMode(NSString* mode, NSDictionary* service, NSString* serviceID, NSDictionary* originalSets, int localPort, int httpPort) {
+    NSMutableDictionary* proxies = [service[@"Proxies"] mutableCopy];
+    if (proxies == NULL) {
+        proxies = [[NSMutableDictionary alloc] init];
+    }
     disableManualProxySettings(proxies);
 
     if ([mode isEqualToString:@"restore"]) {
-        NSDictionary* originalProxySettings = originalSets[key][@"Proxies"];
+        NSDictionary* originalProxySettings = originalSets[serviceID][@"Proxies"];
         if (originalProxySettings != NULL) {
             return [originalProxySettings mutableCopy];
         }
@@ -176,20 +226,255 @@ NSMutableDictionary* proxiesForMode(NSString* mode, NSString* key, NSDictionary*
         applyGlobalProxySettings(proxies, localPort, httpPort);
     }
 
+    cleanupInactiveProxySettings(proxies, mode);
+
     return proxies;
 }
 
-void applyProxyModeToServices(SCPreferencesRef prefRef, NSDictionary* sets, NSString* mode, NSDictionary* originalSets, int localPort, int httpPort) {
-    for (NSString *key in [sets allKeys]) {
-        NSMutableDictionary *dict = [sets objectForKey:key];
-        NSString *hardware = [dict valueForKeyPath:@"Interface.Hardware"];
-        if (!isSupportedProxyHardware(hardware)) {
+BOOL applyProxyModeToServices(SCPreferencesRef prefRef, NSDictionary* sets, NSString* mode, NSDictionary* originalSets, int localPort, int httpPort) {
+    SCNetworkSetRef currentSet = SCNetworkSetCopyCurrent(prefRef);
+    if (currentSet == NULL) {
+        NSLog(@"Failed to access current network set");
+        return NO;
+    }
+
+    NSArray* services = CFBridgingRelease(SCNetworkSetCopyServices(currentSet));
+    CFRelease(currentSet);
+    if (services == NULL) {
+        NSLog(@"Failed to enumerate network services in current set");
+        return NO;
+    }
+
+    BOOL didApply = NO;
+    for (id serviceObject in services) {
+        SCNetworkServiceRef serviceRef = (__bridge SCNetworkServiceRef)serviceObject;
+        if (serviceRef == NULL || !SCNetworkServiceGetEnabled(serviceRef)) {
             continue;
         }
 
-        NSMutableDictionary* proxies = proxiesForMode(mode, key, sets, originalSets, localPort, httpPort);
-        SCPreferencesPathSetValue(prefRef, (__bridge CFStringRef)proxyPreferencePath(key), (__bridge CFDictionaryRef)proxies);
+        NSString* serviceID = (__bridge NSString*)SCNetworkServiceGetServiceID(serviceRef);
+        if (serviceID == NULL) {
+            continue;
+        }
+
+        NSDictionary* service = sets[serviceID];
+        if (!isConfigurableProxyService(service)) {
+            continue;
+        }
+
+        SCNetworkProtocolRef proxyProtocol = SCNetworkServiceCopyProtocol(serviceRef, kSCNetworkProtocolTypeProxies);
+        if (proxyProtocol == NULL) {
+            continue;
+        }
+
+        NSMutableDictionary* proxies = proxiesForMode(mode, service, serviceID, originalSets, localPort, httpPort);
+        Boolean ok = SCNetworkProtocolSetConfiguration(proxyProtocol, (__bridge CFDictionaryRef)proxies);
+        CFRelease(proxyProtocol);
+        if (!ok) {
+            NSLog(@"Failed to apply proxy settings for service %@", serviceID);
+            return NO;
+        }
+        didApply = YES;
     }
+
+    return didApply;
+}
+
+BOOL createAuthorizedPreferences(SCPreferencesRef* prefRefOut) {
+    if (prefRefOut == NULL) {
+        return NO;
+    }
+
+    *prefRefOut = NULL;
+    AuthorizationRef authRef = NULL;
+    AuthorizationFlags authFlags = kAuthorizationFlagDefaults
+    | kAuthorizationFlagExtendRights
+    | kAuthorizationFlagInteractionAllowed
+    | kAuthorizationFlagPreAuthorize;
+
+    OSStatus authErr = AuthorizationCreate(nil, kAuthorizationEmptyEnvironment, authFlags, &authRef);
+    if (authErr != noErr || authRef == NULL) {
+        NSLog(@"No authorization has been granted to modify network configuration");
+        return NO;
+    }
+
+    SCPreferencesRef prefRef = SCPreferencesCreateWithAuthorization(nil, CFSTR("V2RayXS"), nil, authRef);
+    if (prefRef == NULL) {
+        NSLog(@"Failed to open system configuration preferences");
+        return NO;
+    }
+
+    *prefRefOut = prefRef;
+    return YES;
+}
+
+NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments) {
+    NSTask* task = [[NSTask alloc] init];
+    task.launchPath = launchPath;
+    task.arguments = arguments;
+    NSPipe* stdoutPipe = [NSPipe pipe];
+    NSPipe* stderrPipe = [NSPipe pipe];
+    task.standardOutput = stdoutPipe;
+    task.standardError = stderrPipe;
+    [task launch];
+    [task waitUntilExit];
+
+    NSData* stdoutData = [[stdoutPipe fileHandleForReading] readDataToEndOfFile];
+    NSData* stderrData = [[stderrPipe fileHandleForReading] readDataToEndOfFile];
+    NSString* stdoutString = [[NSString alloc] initWithData:stdoutData encoding:NSUTF8StringEncoding] ?: @"";
+    NSString* stderrString = [[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] ?: @"";
+
+    return @{
+        @"status": @(task.terminationStatus),
+        @"stdout": stdoutString,
+        @"stderr": stderrString,
+    };
+}
+
+BOOL runNetworksetup(NSArray<NSString*>* arguments) {
+    NSDictionary* result = runTool(@"/usr/sbin/networksetup", arguments);
+    int status = [result[@"status"] intValue];
+    if (status != 0) {
+        NSLog(@"networksetup %@ failed with status %d: %@", [arguments componentsJoinedByString:@" "], status, result[@"stderr"]);
+        return NO;
+    }
+    return YES;
+}
+
+BOOL configureNetworksetupProxyForService(NSString* serviceName, NSString* mode, int localPort, int httpPort) {
+    if (serviceName == NULL || [serviceName isEqualToString:@""]) {
+        return NO;
+    }
+
+    BOOL ok = YES;
+    ok = runNetworksetup(@[@"-setautoproxystate", serviceName, @"off"]) && ok;
+    ok = runNetworksetup(@[@"-setwebproxystate", serviceName, @"off"]) && ok;
+    ok = runNetworksetup(@[@"-setsecurewebproxystate", serviceName, @"off"]) && ok;
+    ok = runNetworksetup(@[@"-setsocksfirewallproxystate", serviceName, @"off"]) && ok;
+
+    if ([mode isEqualToString:@"auto"]) {
+        ok = runNetworksetup(@[@"-setautoproxyurl", serviceName, @"http://127.0.0.1:8070/proxy.pac"]) && ok;
+        ok = runNetworksetup(@[@"-setautoproxystate", serviceName, @"on"]) && ok;
+        return ok;
+    }
+
+    if ([mode isEqualToString:@"global"]) {
+        if (httpPort > 0) {
+            NSString* httpPortString = [NSString stringWithFormat:@"%d", httpPort];
+            ok = runNetworksetup(@[@"-setwebproxy", serviceName, @"127.0.0.1", httpPortString]) && ok;
+            ok = runNetworksetup(@[@"-setsecurewebproxy", serviceName, @"127.0.0.1", httpPortString]) && ok;
+            ok = runNetworksetup(@[@"-setwebproxystate", serviceName, @"on"]) && ok;
+            ok = runNetworksetup(@[@"-setsecurewebproxystate", serviceName, @"on"]) && ok;
+        }
+        if (localPort > 0) {
+            NSString* localPortString = [NSString stringWithFormat:@"%d", localPort];
+            ok = runNetworksetup(@[@"-setsocksfirewallproxy", serviceName, @"127.0.0.1", localPortString]) && ok;
+            ok = runNetworksetup(@[@"-setsocksfirewallproxystate", serviceName, @"on"]) && ok;
+        }
+    }
+
+    return ok;
+}
+
+BOOL applyDynamicProxyState(NSString* mode, int localPort, int httpPort) {
+    SCPreferencesRef prefRef = SCPreferencesCreate(NULL, CFSTR("V2RayXS"), NULL);
+    if (prefRef == NULL) {
+        return NO;
+    }
+
+    SCNetworkSetRef currentSet = SCNetworkSetCopyCurrent(prefRef);
+    if (currentSet == NULL) {
+        CFRelease(prefRef);
+        return NO;
+    }
+
+    NSArray* services = CFBridgingRelease(SCNetworkSetCopyServices(currentSet));
+    CFRelease(currentSet);
+    CFRelease(prefRef);
+    if (services == NULL) {
+        return NO;
+    }
+
+    BOOL didApply = NO;
+    BOOL ok = YES;
+    for (id serviceObject in services) {
+        SCNetworkServiceRef serviceRef = (__bridge SCNetworkServiceRef)serviceObject;
+        if (serviceRef == NULL || !SCNetworkServiceGetEnabled(serviceRef)) {
+            continue;
+        }
+
+        NSString* serviceName = (__bridge NSString*)SCNetworkServiceGetName(serviceRef);
+        if (serviceName == NULL || [serviceName isEqualToString:@""]) {
+            continue;
+        }
+
+        didApply = YES;
+        ok = configureNetworksetupProxyForService(serviceName, mode, localPort, httpPort) && ok;
+    }
+
+    return didApply && ok;
+}
+
+BOOL runProxySaveMode(void) {
+    SCPreferencesRef prefRef = NULL;
+    if (!createAuthorizedPreferences(&prefRef)) {
+        return NO;
+    }
+
+    NSDictionary *sets = (__bridge NSDictionary *)SCPreferencesGetValue(prefRef, kSCPrefNetworkServices);
+    BOOL ok = saveProxyBackup(sets);
+    CFRelease(prefRef);
+    return ok;
+}
+
+BOOL applySystemProxyMode(NSString* mode, NSDictionary* originalSets, int localPort, int httpPort) {
+    SCPreferencesRef prefRef = NULL;
+    if (!createAuthorizedPreferences(&prefRef)) {
+        return NO;
+    }
+
+    if (!SCPreferencesLock(prefRef, YES)) {
+        NSLog(@"Failed to lock system configuration preferences: %s", SCErrorString(SCError()));
+        CFRelease(prefRef);
+        return NO;
+    }
+
+    NSDictionary* sets = (__bridge NSDictionary*)SCPreferencesGetValue(prefRef, kSCPrefNetworkServices);
+    if (sets == NULL) {
+        NSLog(@"Failed to read network services from system preferences");
+        SCPreferencesUnlock(prefRef);
+        CFRelease(prefRef);
+        return NO;
+    }
+
+    if (!applyProxyModeToServices(prefRef, sets, mode, originalSets, localPort, httpPort)) {
+        SCPreferencesUnlock(prefRef);
+        CFRelease(prefRef);
+        return NO;
+    }
+
+    if (!SCPreferencesCommitChanges(prefRef)) {
+        NSLog(@"Failed to commit proxy changes: %s", SCErrorString(SCError()));
+        SCPreferencesUnlock(prefRef);
+        CFRelease(prefRef);
+        return NO;
+    }
+    if (!SCPreferencesApplyChanges(prefRef)) {
+        NSLog(@"Failed to apply proxy changes: %s", SCErrorString(SCError()));
+        SCPreferencesUnlock(prefRef);
+        CFRelease(prefRef);
+        return NO;
+    }
+
+    SCPreferencesSynchronize(prefRef);
+    SCPreferencesUnlock(prefRef);
+    CFRelease(prefRef);
+
+    if (![mode isEqualToString:@"restore"]) {
+        return applyDynamicProxyState(mode, localPort, httpPort);
+    }
+
+    return YES;
 }
 
 NSMutableDictionary* loadRouteBackup(void) {
@@ -313,6 +598,11 @@ int main(int argc, const char * argv[])
             printf(INFO);
             return 1;
         }
+
+        if (!validateModeArguments(mode, argc)) {
+            printf(INFO);
+            return 1;
+        }
         
         runtimeMode = mode;
         
@@ -322,6 +612,10 @@ int main(int argc, const char * argv[])
         }
         
         if ([mode isEqualToString:@"tun"]) {
+            if (!applySystemProxyMode(@"off", nil, 0, 0)) {
+                NSLog(@"Failed to disable existing system proxy before enabling tun mode");
+                return 1;
+            }
             
             proxyServer = exampleServer; // Just avoid empty abnormalities
             if (argv[2] != NULL) {
@@ -447,46 +741,23 @@ int main(int argc, const char * argv[])
             return 0;
         }
 
-        static AuthorizationRef authRef;
-        static AuthorizationFlags authFlags;
-        authFlags = kAuthorizationFlagDefaults
-        | kAuthorizationFlagExtendRights
-        | kAuthorizationFlagInteractionAllowed
-        | kAuthorizationFlagPreAuthorize;
-        OSStatus authErr = AuthorizationCreate(nil, kAuthorizationEmptyEnvironment, authFlags, &authRef);
-        if (authErr != noErr) {
-            authRef = nil;
-        } else {
-            if (authRef == NULL) {
-                NSLog(@"No authorization has been granted to modify network configuration");
+        NSDictionary* originalSets = nil;
+        int localPort = 0;
+        int httpPort = 0;
+        if ([mode isEqualToString:@"save"]) {
+            return runProxySaveMode() ? 0 : 1;
+        }
+
+        if ([mode isEqualToString:@"restore"]) {
+            originalSets = loadProxyBackup();
+        } else if ([mode isEqualToString:@"global"]) {
+            if (!parseProxyPorts(argv[2], argv[3], &localPort, &httpPort)) {
                 return 1;
             }
-            
-            SCPreferencesRef prefRef = SCPreferencesCreateWithAuthorization(nil, CFSTR("V2RayXS"), nil, authRef);
-            
-            NSDictionary *sets = (__bridge NSDictionary *)SCPreferencesGetValue(prefRef, kSCPrefNetworkServices);
-            NSDictionary* originalSets = nil;
-            int localPort = 0;
-            int httpPort = 0;
-            if ([mode isEqualToString:@"save"]) {
-                saveProxyBackup(sets);
-                return 0;
-            }
+        }
 
-            if ([mode isEqualToString:@"restore"]) {
-                originalSets = loadProxyBackup();
-            } else if ([mode isEqualToString:@"global"]) {
-                if (!parseProxyPorts(argv[2], argv[3], &localPort, &httpPort)) {
-                    return 1;
-                }
-            }
-
-            applyProxyModeToServices(prefRef, sets, mode, originalSets, localPort, httpPort);
-            
-            SCPreferencesCommitChanges(prefRef);
-            SCPreferencesApplyChanges(prefRef);
-            SCPreferencesSynchronize(prefRef);
-            
+        if (!applySystemProxyMode(mode, originalSets, localPort, httpPort)) {
+            return 1;
         }
         
         printf("proxy set to %s\n", [mode UTF8String]);

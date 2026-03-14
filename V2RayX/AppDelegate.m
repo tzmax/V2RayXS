@@ -34,6 +34,7 @@
 
 - (NSString*)helperInstallSourcePath;
 - (NSString*)shellEscapedArgument:(NSString*)argument;
+- (NSString*)appleScriptStringLiteral:(NSString*)value;
 - (BOOL)installHelperBinary:(NSString**)errorMessage;
 - (BOOL)helperBinaryAtPathIsHealthy:(NSString*)helperPath error:(NSString**)errorMessage;
 - (NSString*)helperVersionAtPath:(NSString*)helperPath error:(NSString**)errorMessage;
@@ -299,6 +300,12 @@ static AppDelegate *appDelegate;
     return [NSString stringWithFormat:@"'%@'", escaped];
 }
 
+- (NSString*)appleScriptStringLiteral:(NSString*)value {
+    NSString* escaped = [value stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    return [NSString stringWithFormat:@"\"%@\"", escaped];
+}
+
 - (BOOL)installHelperBinary:(NSString**)errorMessage {
     NSString* sourcePath = [self helperInstallSourcePath];
     NSFileManager* fileManager = [NSFileManager defaultManager];
@@ -323,7 +330,7 @@ static AppDelegate *appDelegate;
     NSString* escapedDestination = [self shellEscapedArgument:kV2RayXHelper];
     NSString* escapedTempPath = [self shellEscapedArgument:tempHelperPath];
     NSString* installCommand = [NSString stringWithFormat:@"/bin/rm -f %@ && /bin/mkdir -p %@ && /usr/bin/install -o root -g admin -m 4755 %@ %@ && /bin/mv -f %@ %@", escapedTempPath, escapedDirectory, escapedSource, escapedTempPath, escapedTempPath, escapedDestination];
-    NSString* script = [NSString stringWithFormat:@"do shell script %@ with administrator privileges", [self shellEscapedArgument:installCommand]];
+    NSString* script = [NSString stringWithFormat:@"do shell script %@ with administrator privileges", [self appleScriptStringLiteral:installCommand]];
 
     NSDictionary* appleScriptError = nil;
     NSAppleScript* appleScript = [[NSAppleScript new] initWithSource:script];
@@ -468,6 +475,12 @@ static AppDelegate *appDelegate;
 - (BOOL)runHelperCommand:(NSArray*)arguments action:(NSString*)action {
     int exitCode = runCommandLine(kV2RayXHelper, arguments);
     if (exitCode == 0) {
+        return YES;
+    }
+
+    NSString* commandName = arguments.count > 0 ? arguments[0] : @"";
+    if ([commandName isEqualToString:@"tun"] && (exitCode == SIGTERM || exitCode == SIGINT)) {
+        NSLog(@"Helper command `%@` exited with signal %d during expected shutdown", [arguments componentsJoinedByString:@" "], exitCode);
         return YES;
     }
 
@@ -954,9 +967,10 @@ static AppDelegate *appDelegate;
         }
         
         dispatch_async(taskQueue, ^{
-            if(self.proxyMode == pacMode) {
+            if(self.proxyMode == pacMode || self.proxyMode == tunMode) {
                 // close system proxy first to refresh pac file
-                [self runHelperCommand:@[@"off"] action:@"disable system proxy before PAC refresh"];
+                NSString* action = self.proxyMode == pacMode ? @"disable system proxy before PAC refresh" : @"disable system proxy before enabling tun mode";
+                [self runHelperCommand:@[@"off"] action:action];
             }
             [self runHelperCommand:arguments action:@"apply helper network settings"];
         });
