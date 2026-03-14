@@ -479,7 +479,8 @@ static AppDelegate *appDelegate;
     }
 
     NSString* commandName = arguments.count > 0 ? arguments[0] : @"";
-    if ([commandName isEqualToString:@"tun"] && (exitCode == SIGTERM || exitCode == SIGINT)) {
+    NSString* tunSubcommand = arguments.count > 1 ? arguments[1] : @"";
+    if ([commandName isEqualToString:@"tun"] && [tunSubcommand isEqualToString:@"start"] && (exitCode == SIGTERM || exitCode == SIGINT)) {
         NSLog(@"Helper command `%@` exited with signal %d during expected shutdown", [arguments componentsJoinedByString:@" "], exitCode);
         return YES;
     }
@@ -493,6 +494,94 @@ static AppDelegate *appDelegate;
     NSLog(@"%@ (%@)", errorMessage, action);
     [self presentHelperFailureAlert:errorMessage];
     return NO;
+}
+
+- (void)collectServerAddressesFromOutbound:(NSDictionary*)outbound into:(NSMutableArray<NSString*>*)serverAddresses {
+    NSArray* vnextList = outbound[@"settings"][@"vnext"];
+    if ([vnextList isKindOfClass:[NSArray class]]) {
+        for (NSDictionary* vnextItem in vnextList) {
+            NSString* address = vnextItem[@"address"];
+            if ([address isKindOfClass:[NSString class]] && address.length > 0 && ![serverAddresses containsObject:address]) {
+                [serverAddresses addObject:address];
+            }
+        }
+    }
+    NSArray* serversList = outbound[@"settings"][@"servers"];
+    if ([serversList isKindOfClass:[NSArray class]]) {
+        for (NSDictionary* serverItem in serversList) {
+            NSString* address = serverItem[@"address"] ?: serverItem[@"server"];
+            if ([address isKindOfClass:[NSString class]] && address.length > 0 && ![serverAddresses containsObject:address]) {
+                [serverAddresses addObject:address];
+            }
+        }
+    }
+}
+
+- (NSArray<NSString*>*)resolvedIPAddressesFromHosts:(NSArray<NSString*>*)hosts {
+    NSMutableOrderedSet<NSString*>* resolvedIPs = [[NSMutableOrderedSet alloc] init];
+    for (NSString* host in hosts) {
+        if (![host isKindOfClass:[NSString class]] || host.length == 0) {
+            continue;
+        }
+        struct addrinfo hints;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_ADDRCONFIG;
+
+        struct addrinfo* results = NULL;
+        if (getaddrinfo([host UTF8String], NULL, &hints, &results) != 0) {
+            continue;
+        }
+
+        for (struct addrinfo* cursor = results; cursor != NULL; cursor = cursor->ai_next) {
+            char addressBuffer[INET6_ADDRSTRLEN] = {0};
+            const void* addrPtr = NULL;
+            if (cursor->ai_family == AF_INET) {
+                addrPtr = &((struct sockaddr_in*)cursor->ai_addr)->sin_addr;
+                inet_ntop(AF_INET, addrPtr, addressBuffer, sizeof(addressBuffer));
+            } else if (cursor->ai_family == AF_INET6) {
+                addrPtr = &((struct sockaddr_in6*)cursor->ai_addr)->sin6_addr;
+                inet_ntop(AF_INET6, addrPtr, addressBuffer, sizeof(addressBuffer));
+            }
+            if (addressBuffer[0] != '\0') {
+                [resolvedIPs addObject:[NSString stringWithUTF8String:addressBuffer]];
+            }
+        }
+        freeaddrinfo(results);
+    }
+    return [resolvedIPs array];
+}
+
+- (NSArray<NSString*>*)tunWhitelistIPAddresses {
+    NSMutableArray<NSString*>* serverAddresses = [[NSMutableArray alloc] init];
+    if (!useCusProfile) {
+        NSInteger outboundCount = profiles.count + _subsOutbounds.count;
+        if (!useMultipleServer && selectedServerIndex >= 0 && selectedServerIndex < outboundCount) {
+            NSDictionary* selectedOutbound = selectedServerIndex < profiles.count ? profiles[selectedServerIndex] : _subsOutbounds[selectedServerIndex - profiles.count];
+            [self collectServerAddressesFromOutbound:selectedOutbound into:serverAddresses];
+        }
+        for (NSDictionary* outbound in profiles) {
+            [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
+        }
+        for (NSDictionary* outbound in _subsOutbounds) {
+            [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
+        }
+    } else if (selectedCusServerIndex >= 0 && selectedCusServerIndex < cusProfiles.count) {
+        NSData* customProfileData = [NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]];
+        NSDictionary* customJSON = customProfileData != nil ? [NSJSONSerialization JSONObjectWithData:customProfileData options:0 error:nil] : nil;
+        NSArray* customOutbounds = customJSON[@"outbounds"];
+        if ([customOutbounds isKindOfClass:[NSArray class]]) {
+            for (NSDictionary* outbound in customOutbounds) {
+                [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
+            }
+        }
+        NSDictionary* outbound = customJSON[@"outbound"];
+        if ([outbound isKindOfClass:[NSDictionary class]]) {
+            [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
+        }
+    }
+    return [self resolvedIPAddressesFromHosts:serverAddresses];
 }
 
 - (BOOL)isSysconfVersionOK {
@@ -905,8 +994,6 @@ static AppDelegate *appDelegate;
             NSInteger cusHttpPort = 0;
             NSInteger cusSocksPort = 0;
             
-            NSMutableArray *serverAddress = [[NSMutableArray alloc] init];
-            
             // global mode
             if(useMultipleServer || !useCusProfile) {
                 arguments = @[@"global", [NSString stringWithFormat:@"%ld", localPort], [NSString stringWithFormat:@"%ld", httpPort]];
@@ -934,34 +1021,7 @@ static AppDelegate *appDelegate;
             
             // tun mode
             if(proxyMode == tunMode) {
-                
-                if(!useCusProfile) {
-                    // Get the currently selected server
-                    NSDictionary* profile = profiles[selectedServerIndex];
-                    if(profile != NULL && profile[@"settings"] != NULL && profile[@"settings"][@"vnext"] != NULL && [profile[@"settings"][@"vnext"] isKindOfClass:[NSArray class]]) {
-                        for (NSDictionary *vnextItem in profile[@"settings"][@"vnext"]) {
-                            if(vnextItem[@"address"] != NULL) {
-                                [serverAddress addObject: vnextItem[@"address"]];
-                            }
-                        }
-                    }
-                    
-                    // Count all servers.
-                    for (NSDictionary *profile in profiles) {
-                        if(profile != NULL && profile[@"settings"] != NULL && profile[@"settings"][@"vnext"] != NULL && [profile[@"settings"][@"vnext"] isKindOfClass:[NSArray class]]) {
-                            for (NSDictionary *vnextItem in profile[@"settings"][@"vnext"]) {
-                                if(vnextItem[@"address"] != NULL && ![serverAddress containsObject: vnextItem[@"address"]]) {
-                                    [serverAddress addObject: vnextItem[@"address"]];
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if(serverAddress.count < 1) {
-                    [serverAddress addObject: @""];
-                }
-                arguments = @[@"tun", serverAddress[0], [NSString stringWithFormat:@"%ld", localPort]];
+                arguments = @[@"tun", @"start", [NSString stringWithFormat:@"%ld", localPort]];
             }
             
         }
@@ -971,6 +1031,22 @@ static AppDelegate *appDelegate;
                 // close system proxy first to refresh pac file
                 NSString* action = self.proxyMode == pacMode ? @"disable system proxy before PAC refresh" : @"disable system proxy before enabling tun mode";
                 [self runHelperCommand:@[@"off"] action:action];
+            }
+            if (self.proxyMode == tunMode) {
+                NSArray<NSString*>* tunWhitelistIPs = [self tunWhitelistIPAddresses];
+                if (tunWhitelistIPs.count > 0) {
+                    NSMutableArray* syncArguments = [NSMutableArray arrayWithObject:@"route"];
+                    [syncArguments addObject:@"sync-file"];
+                    NSString* tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"v2rayxs_tun_whitelist.json"];
+                    NSData* whitelistData = [NSJSONSerialization dataWithJSONObject:tunWhitelistIPs options:0 error:nil];
+                    if (whitelistData != nil) {
+                        [whitelistData writeToFile:tempPath atomically:YES];
+                        [syncArguments addObject:tempPath];
+                        [self runHelperCommand:syncArguments action:@"sync tun whitelist store before enabling tun mode"];
+                    }
+                } else {
+                    [self runHelperCommand:@[@"route", @"clear"] action:@"clear tun whitelist store before enabling tun mode"];
+                }
             }
             [self runHelperCommand:arguments action:@"apply helper network settings"];
         });
@@ -1322,11 +1398,12 @@ NSTask *helperApplicationTask;
 
 void closeHelperApplicationTask(void) {
     if(helperApplicationTask != NULL && [helperApplicationTask isRunning]) {
-        // NSLog(@"tzmax: commTask terminate");
-        [helperApplicationTask interrupt]; // push SIGINT signal, enable the helper to perform the cleanup task.
-        sleep(1);
-        // usleep(800 * 1000);
-        [helperApplicationTask terminate];
+        int exitCode = runCommandLine(kV2RayXHelper, @[@"tun", @"stop", @"--json"]);
+        if (exitCode != 0) {
+            [helperApplicationTask interrupt];
+            sleep(1);
+            [helperApplicationTask terminate];
+        }
         helperApplicationTask = NULL;
         return;
     }
@@ -1336,8 +1413,12 @@ int runCommandLine(NSString* launchPath, NSArray* arguments) {
     NSTask *task = [[NSTask alloc] init];
     
     // take notes helperApplicationTask
-    closeHelperApplicationTask();
-    if(helperApplicationTask == NULL && [arguments[0]  isEqual: @"tun"]) {
+    BOOL startsTunSession = arguments.count > 1 && [arguments[0] isEqual:@"tun"] && [arguments[1] isEqual:@"start"];
+    BOOL talksToTunSession = (arguments.count > 1 && [arguments[0] isEqual:@"tun"] && ([arguments[1] isEqual:@"stop"] || [arguments[1] isEqual:@"status"])) || (arguments.count > 0 && [arguments[0] isEqual:@"route"]);
+    if (!startsTunSession && !talksToTunSession) {
+        closeHelperApplicationTask();
+    }
+    if(helperApplicationTask == NULL && startsTunSession) {
         helperApplicationTask = task;
     }
     
