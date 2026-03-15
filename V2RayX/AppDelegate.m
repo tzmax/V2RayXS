@@ -15,6 +15,9 @@
 #import "ConfigImporter.h"
 #import "NSData+AES256Encryption.h"
 #import <sys/stat.h>
+#import <sys/socket.h>
+#import <sys/uio.h>
+#import <fcntl.h>
 #import <netdb.h>
 
 #define kUseAllServer -10
@@ -34,6 +37,7 @@
 }
 
 - (NSString*)helperInstallSourcePath;
+- (NSDictionary*)allocateTunFDWithPreferredName:(NSString*)preferredName error:(NSString**)errorMessage;
 - (NSString*)shellEscapedArgument:(NSString*)argument;
 - (NSString*)appleScriptStringLiteral:(NSString*)value;
 - (BOOL)installHelperBinary:(NSString**)errorMessage;
@@ -49,8 +53,118 @@ static AppDelegate *appDelegate;
 static BOOL helperTunSessionActive = NO;
 static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
 
+static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
+    if (socketFD < 0) {
+        return nil;
+    }
+
+    char payloadBuffer[4096];
+    memset(payloadBuffer, 0, sizeof(payloadBuffer));
+    char controlBuffer[CMSG_SPACE(sizeof(int))];
+    memset(controlBuffer, 0, sizeof(controlBuffer));
+
+    struct iovec io = {
+        .iov_base = payloadBuffer,
+        .iov_len = sizeof(payloadBuffer) - 1,
+    };
+    struct msghdr message;
+    memset(&message, 0, sizeof(message));
+    message.msg_iov = &io;
+    message.msg_iovlen = 1;
+    message.msg_control = controlBuffer;
+    message.msg_controllen = sizeof(controlBuffer);
+
+    ssize_t received = recvmsg(socketFD, &message, 0);
+    if (received <= 0) {
+        return nil;
+    }
+
+    int receivedFD = -1;
+    for (struct cmsghdr* header = CMSG_FIRSTHDR(&message); header != NULL; header = CMSG_NXTHDR(&message, header)) {
+        if (header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_RIGHTS) {
+            memcpy(&receivedFD, CMSG_DATA(header), sizeof(int));
+            break;
+        }
+    }
+    if (receivedFD < 0) {
+        return nil;
+    }
+
+    NSData* payloadData = [NSData dataWithBytes:payloadBuffer length:(NSUInteger)received];
+    NSDictionary* payload = [NSJSONSerialization JSONObjectWithData:payloadData options:0 error:nil];
+    if (![payload isKindOfClass:[NSDictionary class]]) {
+        close(receivedFD);
+        return nil;
+    }
+
+    return @{
+        @"fd": @(receivedFD),
+        @"payload": payload,
+    };
+}
+
 - (NSData*)v2rayJSONconfig {
     return v2rayJSONconfig;
+}
+
+- (NSDictionary*)allocateTunFDWithPreferredName:(NSString*)preferredName error:(NSString**)errorMessage {
+    int sockets[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"Failed to create local tun fd transport socketpair.";
+        }
+        return nil;
+    }
+
+    int flags = fcntl(sockets[1], F_GETFD);
+    if (flags >= 0) {
+        fcntl(sockets[1], F_SETFD, flags & ~FD_CLOEXEC);
+    }
+
+    NSString* socketFDString = [NSString stringWithFormat:@"%d", sockets[1]];
+    NSArray* arguments = preferredName.length > 0 ? @[@"tun", @"allocate", preferredName, socketFDString] : @[@"tun", @"allocate", socketFDString];
+    NSDictionary* helperResult = runCommandLineResultWithSetup(kV2RayXHelper, arguments, ^(NSTask* task) {
+        NSMutableDictionary* environment = [[[NSProcessInfo processInfo] environment] mutableCopy];
+        environment[@"V2RAYXS_TUN_FD_SOCKET"] = socketFDString;
+        [task setEnvironment:environment];
+    });
+    close(sockets[1]);
+    if ([helperResult[@"exitCode"] intValue] != 0) {
+        close(sockets[0]);
+        if (errorMessage != NULL) {
+            NSString* helperError = [self helperCommandFailureDetailsFromResult:helperResult];
+            *errorMessage = helperError.length > 0 ? helperError : @"Helper failed to prepare tun fd.";
+        }
+        return nil;
+    }
+
+    NSDictionary* received = receiveFileDescriptorAndPayload(sockets[0]);
+    close(sockets[0]);
+    if (![received isKindOfClass:[NSDictionary class]]) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"Did not receive tun fd from helper.";
+        }
+        return nil;
+    }
+
+    NSDictionary* payload = received[@"payload"];
+    NSString* tunName = [payload[@"tunName"] isKindOfClass:[NSString class]] ? payload[@"tunName"] : @"";
+    NSNumber* fdNumber = received[@"fd"];
+    if (tunName.length == 0 || ![fdNumber isKindOfClass:[NSNumber class]]) {
+        int receivedFD = [fdNumber intValue];
+        if (receivedFD >= 0) {
+            close(receivedFD);
+        }
+        if (errorMessage != NULL) {
+            *errorMessage = @"Helper returned incomplete tun fd payload.";
+        }
+        return nil;
+    }
+
+    return @{
+        @"tunName": tunName,
+        @"fd": fdNumber,
+    };
 }
 
 // a good reference: https://blog.gaelfoppolo.com/user-notifications-in-macos-66c25ed5c692
@@ -115,12 +229,36 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
         while (true) {
             dispatch_semaphore_wait(self->coreLoopSemaphore, DISPATCH_TIME_FOREVER);
             self->coreProcess = [[NSTask alloc] init];
+            NSDictionary* xrayTunFDContext = nil;
+            if (self->proxyState && self->proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun]) {
+                NSString* preferredTunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
+                NSString* tunFDError = nil;
+                    xrayTunFDContext = [self allocateTunFDWithPreferredName:preferredTunName error:&tunFDError];
+                if (xrayTunFDContext == nil) {
+                    NSLog(@"%@", tunFDError ?: @"Failed to prepare tun fd for Xray.");
+                    helperTunSessionActive = NO;
+                    [self presentHelperFailureAlert:tunFDError ?: @"Failed to prepare tun fd for Xray."];
+                    continue;
+                }
+                NSString* actualTunName = xrayTunFDContext[@"tunName"];
+                if ([actualTunName isKindOfClass:[NSString class]] && actualTunName.length > 0) {
+                    [[NSUserDefaults standardUserDefaults] setObject:actualTunName forKey:@"xrayTunInterfaceName"];
+                }
+            }
             if (@available(macOS 10.13, *)) {
                 [self->coreProcess setExecutableURL:[NSURL fileURLWithPath:[self getV2rayPath]]];
             } else {
                 [self->coreProcess setLaunchPath:[self getV2rayPath]];
             }
             [self->coreProcess setArguments:@[@"-config", @"stdin:"]];
+            if (xrayTunFDContext != nil) {
+                int tunFD = [xrayTunFDContext[@"fd"] intValue];
+                fcntl(tunFD, F_SETFD, 0);
+                NSMutableDictionary* environment = [[[NSProcessInfo processInfo] environment] mutableCopy];
+                environment[@"xray.tun.fd"] = [NSString stringWithFormat:@"%d", tunFD];
+                environment[@"XRAY_TUN_FD"] = [NSString stringWithFormat:@"%d", tunFD];
+                [self->coreProcess setEnvironment:environment];
+            }
             NSPipe* stdinpipe = [NSPipe pipe];
             [self->coreProcess setStandardInput:stdinpipe];
             NSData* configData = [NSJSONSerialization dataWithJSONObject:[self generateConfigFile] options:0 error:nil];
@@ -128,6 +266,12 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
             [self->coreProcess launch];
             [[stdinpipe fileHandleForWriting] closeFile];
             [self->coreProcess waitUntilExit];
+            if (xrayTunFDContext != nil) {
+                int tunFD = [xrayTunFDContext[@"fd"] intValue];
+                if (tunFD >= 0) {
+                    close(tunFD);
+                }
+            }
             NSLog(@"core exit with code %d", [self->coreProcess terminationStatus]);
         }
     });
@@ -688,7 +832,7 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
         return;
     }
     NSDictionary *statusResponse = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    NSDictionary *payload = [statusResponse isKindOfClass:[NSDictionary class]] ? statusResponse[@"payload"] : nil;
+    NSDictionary *payload = [statusResponse isKindOfClass:[NSDictionary class]] ? statusResponse : nil;
     NSString *sessionState = [payload isKindOfClass:[NSDictionary class]] ? payload[@"session"] : nil;
     helperTunSessionActive = [sessionState isKindOfClass:[NSString class]] && ![sessionState isEqualToString:@"inactive"];
 }
@@ -1056,9 +1200,6 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
         }
     }
     BOOL shouldMaintainTunRoutingSession = [self shouldMaintainTunRoutingSession];
-    if (proxyState == true && proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun]) {
-        [[NSUserDefaults standardUserDefaults] setObject:[self availableUtunName] forKey:@"xrayTunInterfaceName"];
-    }
     [self coreConfigDidChange:self];
     if (proxyState == false) {
         [self stopTunRoutingSession];
@@ -1087,9 +1228,6 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
     }
 
     proxyMode = [sender tag];
-    if (proxyState == true && proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun]) {
-        [[NSUserDefaults standardUserDefaults] setObject:[self availableUtunName] forKey:@"xrayTunInterfaceName"];
-    }
     [self updateMenus];
     if (sender == _pacModeItem) {
         [self updatePacMenuList];
@@ -1223,10 +1361,9 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
                 if (shouldUseXrayTun) {
                     NSString* tunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
                     if (![tunName isKindOfClass:[NSString class]] || tunName.length == 0) {
-                        tunName = [self availableUtunName];
-                        [[NSUserDefaults standardUserDefaults] setObject:tunName forKey:@"xrayTunInterfaceName"];
+                        tunName = @"utun10";
                     }
-                    arguments = @[@"tun", @"start", @"--attach", tunName];
+                    arguments = @[@"tun", @"activate", tunName];
                 } else {
                     arguments = @[@"tun", @"start", [NSString stringWithFormat:@"%ld", localPort]];
                 }
@@ -1242,16 +1379,6 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
             }
             if (self.proxyMode == tunMode) {
                 [self syncTunWhitelistRoutes];
-            }
-            if (self.proxyMode == tunMode && shouldUseXrayTun) {
-                NSString* targetTun = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
-                for (NSInteger retry = 0; retry < 30; retry++) {
-                    [NSThread sleepForTimeInterval:0.2];
-                    NSArray<NSString*>* currentUtuns = [self existingUtunInterfaces];
-                    if (targetTun.length > 0 && [currentUtuns containsObject:targetTun]) {
-                        break;
-                    }
-                }
             }
             [self runHelperCommand:arguments action:@"apply helper network settings"];
         });
@@ -1476,7 +1603,7 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
         }
         NSString* tunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
         if (![tunName isKindOfClass:[NSString class]] || tunName.length == 0) {
-            tunName = @"utun233";
+            tunName = [self availableUtunName];
         }
         [inbounds addObject:[@{
             @"port": @0,
@@ -1693,6 +1820,7 @@ void closeHelperApplicationTask(void) {
         helperTunSessionActive = NO;
         return;
     }
+    runCommandLine(kV2RayXHelper, @[@"tun", @"deactivate", @"--json"]);
     helperTunSessionActive = NO;
 }
 
@@ -1701,7 +1829,8 @@ NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments) {
     
     // take notes helperApplicationTask
     BOOL startsTunSession = arguments.count > 1 && [arguments[0] isEqual:@"tun"] && [arguments[1] isEqual:@"start"];
-    BOOL talksToTunSession = (arguments.count > 1 && [arguments[0] isEqual:@"tun"] && ([arguments[1] isEqual:@"stop"] || [arguments[1] isEqual:@"status"])) || (arguments.count > 0 && [arguments[0] isEqual:@"route"]);
+    BOOL activatesExternalTunSession = arguments.count > 1 && [arguments[0] isEqual:@"tun"] && [arguments[1] isEqual:@"activate"];
+    BOOL talksToTunSession = (arguments.count > 1 && [arguments[0] isEqual:@"tun"] && ([arguments[1] isEqual:@"stop"] || [arguments[1] isEqual:@"status"] || [arguments[1] isEqual:@"deactivate"])) || (arguments.count > 0 && [arguments[0] isEqual:@"route"]);
     if (!startsTunSession && !talksToTunSession) {
         closeHelperApplicationTask();
     }
@@ -1736,9 +1865,33 @@ NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments) {
         NSLog(@"%@", string);
     }
     [task waitUntilExit];
-    if (startsTunSession) {
+    if (startsTunSession || activatesExternalTunSession) {
         helperTunSessionActive = (task.terminationStatus == 0 || task.terminationStatus == SIGTERM || task.terminationStatus == SIGINT);
     }
+    return @{
+        @"exitCode": @(task.terminationStatus),
+        @"stdout": stdoutString,
+        @"stderr": stderrString,
+    };
+}
+
+NSDictionary* runCommandLineResultWithSetup(NSString* launchPath, NSArray* arguments, void (^setupTask)(NSTask* task)) {
+    NSTask *task = [[NSTask alloc] init];
+    [task setLaunchPath:launchPath];
+    [task setArguments:arguments];
+    NSPipe *stdoutpipe = [NSPipe pipe];
+    [task setStandardOutput:stdoutpipe];
+    NSPipe *stderrpipe = [NSPipe pipe];
+    [task setStandardError:stderrpipe];
+    if (setupTask != nil) {
+        setupTask(task);
+    }
+    [task launch];
+    NSData *stdoutData = [[stdoutpipe fileHandleForReading] readDataToEndOfFile];
+    NSData *stderrData = [[stderrpipe fileHandleForReading] readDataToEndOfFile];
+    [task waitUntilExit];
+    NSString *stdoutString = [[NSString alloc] initWithData:stdoutData encoding:NSUTF8StringEncoding] ?: @"";
+    NSString *stderrString = [[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] ?: @"";
     return @{
         @"exitCode": @(task.terminationStatus),
         @"stdout": stdoutString,

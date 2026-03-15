@@ -9,6 +9,11 @@
 #ifndef tun_h
 #define tun_h
 
+#import <Foundation/Foundation.h>
+
 int createTUN(void);
+int createTUNWithName(NSString* preferredName, NSString** actualNameOut);
+BOOL ensureTUNInterfaceReady(NSString* tunName, uint32_t mtu, NSString** errorMessage);
+BOOL sendFileDescriptor(int socketFD, int fileDescriptor, NSString* payload);
 
 #endif /* tun_h */

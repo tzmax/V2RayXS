@@ -23,6 +23,7 @@ typedef enum ProxyMode : NSInteger{
 
 
 NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments);
+NSDictionary* runCommandLineResultWithSetup(NSString* launchPath, NSArray* arguments, void (^setupTask)(NSTask* task));
 int runCommandLine(NSString* launchPath, NSArray* arguments);
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSUserNotificationCenterDelegate> {

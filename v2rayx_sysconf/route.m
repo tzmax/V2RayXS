@@ -21,8 +21,11 @@ static NSString* taskOutput(NSDictionary* taskResult);
 static NSString* taskErrorOutput(NSDictionary* taskResult);
 static NSNumber* taskExitCode(NSDictionary* taskResult);
 static NSString* readPipeOutput(int fileDescriptor);
+static NSArray<NSDictionary*>* parseDefaultRoutesFromNetstatOutput(NSString* output, SYSRouteAddressFamily family);
 static NSArray<NSString*>* routeArgumentsForAction(NSString* action, NSString* target, NSString* gateway, SYSRouteAddressFamily family, BOOL isHost);
+static NSArray<NSString*>* routeArgumentsForScopedAction(NSString* action, NSString* target, NSString* gateway, NSString* scopeInterface, SYSRouteAddressFamily family, BOOL isHost);
 static NSArray<NSString*>* routeArgumentsForInterfaceAction(NSString* action, NSString* target, NSString* interfaceName, SYSRouteAddressFamily family, BOOL isHost);
+static NSArray<NSString*>* routeArgumentsForScopedInterfaceAction(NSString* action, NSString* target, NSString* interfaceName, NSString* scopeInterface, SYSRouteAddressFamily family, BOOL isHost);
 static NSString* normalizedIPAddress(NSString* ipAddress, SYSRouteAddressFamily family);
 
 extern char **environ;
@@ -118,6 +121,37 @@ extern char **environ;
     return [self getRouteInterface:@"default" family:family];
 }
 
+-(NSArray<NSDictionary*>*) defaultRoutesForFamily:(SYSRouteAddressFamily)family {
+    NSMutableArray<NSString*>* arguments = [NSMutableArray arrayWithObjects:@"-rn", @"-f", family == SYSRouteAddressFamilyIPv6 ? @"inet6" : @"inet", nil];
+    NSDictionary* taskResult = runTask(@"/usr/sbin/netstat", arguments);
+    NSString* output = taskOutput(taskResult);
+    if (output.length == 0) {
+        return @[];
+    }
+    return parseDefaultRoutesFromNetstatOutput(output, family);
+}
+
+-(NSDictionary*) preferredDefaultRouteForFamily:(SYSRouteAddressFamily)family {
+    NSArray<NSDictionary*>* defaultRoutes = [self defaultRoutesForFamily:family];
+    NSDictionary* firstUsableRoute = nil;
+    for (NSDictionary* route in defaultRoutes) {
+        NSString* gateway = route[@"gateway"];
+        NSString* interfaceName = route[@"interface"];
+        BOOL hasUsableGateway = [self isValidGateway:gateway];
+        BOOL hasUsableInterface = [interfaceName isKindOfClass:[NSString class]] && interfaceName.length > 0;
+        if (!hasUsableGateway && !hasUsableInterface) {
+            continue;
+        }
+        if (firstUsableRoute == nil) {
+            firstUsableRoute = route;
+        }
+        if (![interfaceName hasPrefix:@"utun"]) {
+            return route;
+        }
+    }
+    return firstUsableRoute;
+}
+
 -(BOOL) isValidGateway:(NSString*) gateway {
     return [self isValidIPAddress:gateway family:NULL];
 }
@@ -156,8 +190,16 @@ extern char **environ;
 }
 
 -(BOOL) hasDefaultRouteViaGateway:(NSString*) gateway family:(SYSRouteAddressFamily)family {
-    NSString* currentGateway = [self getDefaultRouteGatewayForFamily:family];
-    return currentGateway != NULL && [currentGateway isEqualToString:gateway];
+    if (gateway == NULL || gateway.length == 0) {
+        return NO;
+    }
+    for (NSDictionary* route in [self defaultRoutesForFamily:family]) {
+        NSString* routeGateway = route[@"gateway"];
+        if ([routeGateway isKindOfClass:[NSString class]] && [routeGateway isEqualToString:gateway]) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 -(BOOL) hasHostRouteToDestination:(NSString*) destination gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family {
@@ -203,6 +245,42 @@ extern char **environ;
     return YES;
 }
 
+-(BOOL) changeDefaultRouteViaGateway:(NSString*) gateway family:(SYSRouteAddressFamily)family {
+    if (![self isValidGateway:gateway]) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForAction(@"change", @"default", gateway, family, NO));
+    if (!taskSucceeded(taskResult) && ![self hasDefaultRouteViaGateway:gateway family:family]) {
+        NSLog(@"Failed to change default route via %@ (exit %@): %@", gateway, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return [self hasDefaultRouteViaGateway:gateway family:family];
+}
+
+-(BOOL) addScopedDefaultRouteViaGateway:(NSString*) gateway interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family {
+    if (![self isValidGateway:gateway] || interfaceName == NULL || interfaceName.length == 0) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForScopedAction(@"add", @"default", gateway, interfaceName, family, NO));
+    if (!taskSucceeded(taskResult) && ![self hasDefaultRouteViaGateway:gateway family:family]) {
+        NSLog(@"Failed to add scoped default route via %@ on %@ (exit %@): %@", gateway, interfaceName, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return [self hasDefaultRouteViaGateway:gateway family:family];
+}
+
+-(BOOL) changeScopedDefaultRouteViaGateway:(NSString*) gateway interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family {
+    if (![self isValidGateway:gateway] || interfaceName == NULL || interfaceName.length == 0) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForScopedAction(@"change", @"default", gateway, interfaceName, family, NO));
+    if (!taskSucceeded(taskResult) && ![self hasDefaultRouteViaGateway:gateway family:family]) {
+        NSLog(@"Failed to change scoped default route via %@ on %@ (exit %@): %@", gateway, interfaceName, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return [self hasDefaultRouteViaGateway:gateway family:family];
+}
+
 -(BOOL) deleteDefaultRouteForFamily:(SYSRouteAddressFamily)family {
     NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForAction(@"delete", @"default", @"0.0.0.0", family, NO));
     if (taskSucceeded(taskResult)) {
@@ -223,26 +301,13 @@ extern char **environ;
     if (interfaceName == NULL || [interfaceName length] == 0) {
         return NO;
     }
-    NSMutableArray<NSString*>* arguments = [NSMutableArray arrayWithObject:@"-n"];
-    if (family == SYSRouteAddressFamilyIPv6) {
-        [arguments addObject:@"-inet6"];
-    }
-    [arguments addObjectsFromArray:@[@"get", @"default"]];
-    NSDictionary* taskResult = runTask(@"/sbin/route", arguments);
-    NSString* outStr = [taskOutput(taskResult) stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (!taskSucceeded(taskResult) && [outStr isEqualToString:@""]) {
-        return NO;
-    }
-    __block BOOL matched = NO;
-    [outStr enumerateLinesUsingBlock:^(NSString * _Nonnull line, BOOL * _Nonnull stop) {
-        NSString* trimmedLine = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if ([trimmedLine hasPrefix:@"interface:"]) {
-            NSString* value = [[trimmedLine substringFromIndex:[@"interface:" length]] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-            matched = [value isEqualToString:interfaceName];
-            *stop = YES;
+    for (NSDictionary* route in [self defaultRoutesForFamily:family]) {
+        NSString* routeInterface = route[@"interface"];
+        if ([routeInterface isKindOfClass:[NSString class]] && [routeInterface isEqualToString:interfaceName]) {
+            return YES;
         }
-    }];
-    return matched;
+    }
+    return NO;
 }
 
 -(BOOL) addDefaultRouteViaInterface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family {
@@ -273,6 +338,42 @@ extern char **environ;
         return NO;
     }
     return YES;
+}
+
+-(BOOL) changeDefaultRouteViaInterface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family {
+    if (interfaceName == NULL || [interfaceName length] == 0) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForInterfaceAction(@"change", @"default", interfaceName, family, NO));
+    if (!taskSucceeded(taskResult) && ![self hasDefaultRouteViaInterface:interfaceName family:family]) {
+        NSLog(@"Failed to change default route via interface %@ (exit %@): %@", interfaceName, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return [self hasDefaultRouteViaInterface:interfaceName family:family];
+}
+
+-(BOOL) addScopedDefaultRouteViaInterface:(NSString*) interfaceName scope:(NSString*) scopeInterface family:(SYSRouteAddressFamily)family {
+    if (interfaceName == NULL || interfaceName.length == 0 || scopeInterface == NULL || scopeInterface.length == 0) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForScopedInterfaceAction(@"add", @"default", interfaceName, scopeInterface, family, NO));
+    if (!taskSucceeded(taskResult) && ![self hasDefaultRouteViaInterface:interfaceName family:family]) {
+        NSLog(@"Failed to add scoped default route via interface %@ scope %@ (exit %@): %@", interfaceName, scopeInterface, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return [self hasDefaultRouteViaInterface:interfaceName family:family];
+}
+
+-(BOOL) changeScopedDefaultRouteViaInterface:(NSString*) interfaceName scope:(NSString*) scopeInterface family:(SYSRouteAddressFamily)family {
+    if (interfaceName == NULL || interfaceName.length == 0 || scopeInterface == NULL || scopeInterface.length == 0) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForScopedInterfaceAction(@"change", @"default", interfaceName, scopeInterface, family, NO));
+    if (!taskSucceeded(taskResult) && ![self hasDefaultRouteViaInterface:interfaceName family:family]) {
+        NSLog(@"Failed to change scoped default route via interface %@ scope %@ (exit %@): %@", interfaceName, scopeInterface, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return [self hasDefaultRouteViaInterface:interfaceName family:family];
 }
 
 -(BOOL) addHostRouteToDestination:(NSString*) destination gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family {
@@ -373,6 +474,16 @@ static NSArray<NSString*>* routeArgumentsForAction(NSString* action, NSString* t
     return arguments;
 }
 
+static NSArray<NSString*>* routeArgumentsForScopedAction(NSString* action, NSString* target, NSString* gateway, NSString* scopeInterface, SYSRouteAddressFamily family, BOOL isHost)
+{
+    NSMutableArray<NSString*>* arguments = [[routeArgumentsForAction(action, target, gateway, family, isHost) mutableCopy] ?: [[NSMutableArray alloc] init] mutableCopy];
+    if (scopeInterface != NULL && scopeInterface.length > 0) {
+        [arguments addObject:@"-ifscope"];
+        [arguments addObject:scopeInterface];
+    }
+    return arguments;
+}
+
 static NSArray<NSString*>* routeArgumentsForInterfaceAction(NSString* action, NSString* target, NSString* interfaceName, SYSRouteAddressFamily family, BOOL isHost)
 {
     NSMutableArray<NSString*>* arguments = [[NSMutableArray alloc] init];
@@ -384,6 +495,16 @@ static NSArray<NSString*>* routeArgumentsForInterfaceAction(NSString* action, NS
     [arguments addObject:target];
     [arguments addObject:@"-iface"];
     [arguments addObject:interfaceName];
+    return arguments;
+}
+
+static NSArray<NSString*>* routeArgumentsForScopedInterfaceAction(NSString* action, NSString* target, NSString* interfaceName, NSString* scopeInterface, SYSRouteAddressFamily family, BOOL isHost)
+{
+    NSMutableArray<NSString*>* arguments = [[routeArgumentsForInterfaceAction(action, target, interfaceName, family, isHost) mutableCopy] ?: [[NSMutableArray alloc] init] mutableCopy];
+    if (scopeInterface != NULL && scopeInterface.length > 0) {
+        [arguments addObject:@"-ifscope"];
+        [arguments addObject:scopeInterface];
+    }
     return arguments;
 }
 
@@ -417,6 +538,46 @@ static NSString* normalizedIPAddress(NSString* ipAddress, SYSRouteAddressFamily 
     }
 
     return [NSString stringWithUTF8String:buffer];
+}
+
+static NSArray<NSDictionary*>* parseDefaultRoutesFromNetstatOutput(NSString* output, SYSRouteAddressFamily family)
+{
+    NSMutableArray<NSDictionary*>* routes = [[NSMutableArray alloc] init];
+    [output enumerateLinesUsingBlock:^(NSString * _Nonnull line, BOOL * _Nonnull stop) {
+        NSString* trimmedLine = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (trimmedLine.length == 0 || [trimmedLine hasPrefix:@"Routing tables"] || [trimmedLine hasPrefix:@"Internet"] || [trimmedLine hasPrefix:@"Destination"]) {
+            return;
+        }
+
+        NSArray<NSString*>* rawParts = [trimmedLine componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSMutableArray<NSString*>* parts = [[NSMutableArray alloc] init];
+        for (NSString* part in rawParts) {
+            if (part.length > 0) {
+                [parts addObject:part];
+            }
+        }
+        if (parts.count < 4) {
+            return;
+        }
+        NSString* destination = parts[0];
+        if (![destination isEqualToString:@"default"]) {
+            return;
+        }
+
+        NSString* gateway = parts[1];
+        NSString* flags = parts[2];
+        NSString* interfaceName = parts[3];
+        if (family == SYSRouteAddressFamilyIPv4 && [flags containsString:@"I"] && ![interfaceName hasPrefix:@"utun"]) {
+            return;
+        }
+        [routes addObject:@{
+            @"destination": destination,
+            @"gateway": gateway ?: @"",
+            @"flags": flags ?: @"",
+            @"interface": interfaceName ?: @"",
+        }];
+    }];
+    return routes;
 }
 
 static NSDictionary* runTask(NSString* launchPath, NSArray<NSString*>* arguments)
