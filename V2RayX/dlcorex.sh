@@ -6,26 +6,48 @@ BOLD='\033[1m'
 NORMAL='\033[0m'
 
 osArch=$(uname -m)
-coreArch="${osArch}"
-if [ "${ARCHS}" == "arm64" ]; then
-    coreArch="arm64"
-fi
+targetArch="${ARCHS:-$osArch}"
+case "$targetArch" in
+    *arm64*)
+        coreArch="arm64"
+        archName="arm64-v8a"
+        ;;
+    *x86_64*)
+        coreArch="x86_64"
+        archName="64"
+        ;;
+    *)
+        coreArch="$osArch"
+        if [[ "$coreArch" == "arm64" ]]; then
+            archName="arm64-v8a"
+        else
+            archName="64"
+        fi
+        ;;
+esac
+
 cd "$SRCROOT"
 output="v${VERSION}"
-if [[ -f ./xray-core-bin/xray ]] && [ "$osArch" == "$coreArch" ]; then
-    output=$(./xray-core-bin/xray --version)
+existingArch=""
+if [[ -f ./xray-core-bin/xray ]]; then
+    archInfo=$(/usr/bin/lipo -info ./xray-core-bin/xray 2>/dev/null || true)
+    if [[ "$archInfo" == *"architecture: arm64"* ]] || [[ "$archInfo" == *"are: arm64"* ]]; then
+        existingArch="arm64"
+    elif [[ "$archInfo" == *"architecture: x86_64"* ]] || [[ "$archInfo" == *"are: x86_64"* ]]; then
+        existingArch="x86_64"
+    fi
+
+    if [[ "$existingArch" == "$coreArch" ]]; then
+        output=$(./xray-core-bin/xray --version)
+    fi
 fi
 existingVersion=${output:5:${#VERSION}}
 
-if [ "$VERSION" != "$existingVersion" ]; then
+if [[ "$VERSION" != "$existingVersion" ]] || [[ "$existingArch" != "$coreArch" ]]; then
     getCore=0
     [ -d "xray-core-bin" ] && rm -rf xray-core-bin
     mkdir -p xray-core-bin
     cd xray-core-bin
-    archName="64" # intel
-    if [[ "$coreArch" == "arm64" ]]; then
-        archName="arm64-v8a" # m1
-    fi
     curl -s -L -o xray-macos.zip https://github.com/XTLS/Xray-core/releases/download/v${VERSION}/Xray-macos-${archName}.zip
     if [[ $? == 0 ]]; then
         unzip -o xray-macos.zip
@@ -39,7 +61,7 @@ if [ "$VERSION" != "$existingVersion" ]; then
             output=$(xray-macos/xray --version)
             existingVersion=${output:5:${#VERSION}}
             echo "existingVersion ${existingVersion}"
-            if [[ "$VERSION" != "$existingVersion" ]] && [ "$osArch" == "$coreArch" ]; then
+            if [[ "$VERSION" != "$existingVersion" ]]; then
                 echo "${RED}xray-macos.zip in the Downloads folder does not contain version ${VERSION}."
                 echo "下载文件夹里的xray-macos.zip不是${VERSION}版本。${NORMAL}"
                 getCore=0

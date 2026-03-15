@@ -52,11 +52,13 @@ else
         fi
 
         zip -r V2RayXS.app.zip V2RayXS.app && mkdir -p ../out/ && rsync -a V2RayXS.app.zip "../out/V2RayXS_${useArch}.app.zip"
-        md5sum "../out/V2RayXS_${useArch}.app.zip" | echo "MD5="$(cat) | cut -f1 -d" " >> "../out/V2RayXS_${useArch}.app.zip.dgst"
-        sha1sum "../out/V2RayXS_${useArch}.app.zip" | echo "SHA1="$(cat) | cut -f1 -d" " >> "../out/V2RayXS_${useArch}.app.zip.dgst"
-        sha256sum "../out/V2RayXS_${useArch}.app.zip" | echo "SHA2-256="$(cat) | cut -f1 -d" " >> "../out/V2RayXS_${useArch}.app.zip.dgst"
+        digestFile="../out/V2RayXS_${useArch}.app.zip.dgst"
+        : > "$digestFile"
+        md5sum "../out/V2RayXS_${useArch}.app.zip" | echo "MD5="$(cat) | cut -f1 -d" " >> "$digestFile"
+        sha1sum "../out/V2RayXS_${useArch}.app.zip" | echo "SHA1="$(cat) | cut -f1 -d" " >> "$digestFile"
+        sha256sum "../out/V2RayXS_${useArch}.app.zip" | echo "SHA2-256="$(cat) | cut -f1 -d" " >> "$digestFile"
         echo -e "${GREEN}-- Packaging succeeded --${NORMAL}"
-        cd ->/dev/null 2>&1
+        cd - >/dev/null 2>&1
 
     else
         echo -e "${RED}-- Build failed --${NORMAL}"
