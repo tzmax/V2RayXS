@@ -12,7 +12,6 @@
 #import <sys/stat.h>
 #import <sys/un.h>
 #import <sys/signal.h>
-#import <sys/socket.h>
 #import <unistd.h>
 #import <netdb.h>
 #import <Tun2socks/Tun2socks.h>
@@ -27,20 +26,20 @@ static NSString* const SystemRouteBackupFilename = @"system_route_backup.plist";
 static NSString* const SystemProxyBackupFilename = @"system_proxy_backup.plist";
 static NSString* const RouteWhitelistStoreFilename = @"route_whitelist_store.plist";
 static NSString* const TunControlSocketFilename = @"tun_route.sock";
+static NSString* const TunSessionLockFilename = @"tun_session.lock";
 
 static NSString* const ROUTE_BACKUP_VERSION_KEY = @"Version";
 static NSString* const ROUTE_BACKUP_STATE_KEY = @"RouteState";
 static NSString* const ROUTE_BACKUP_STATE_IDLE = @"idle";
 static NSString* const ROUTE_BACKUP_STATE_SWITCHING = @"switching";
 static NSString* const ROUTE_BACKUP_STATE_ACTIVE = @"active";
-static NSString* const ROUTE_BACKUP_STATE_RESTORING = @"restoring";
 static NSString* const ROUTE_BACKUP_TUN_NAME_KEY = @"TunName";
 static NSString* const ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY = @"DefaultRouteGatewayV4";
 static NSString* const ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY = @"DefaultRouteGatewayV6";
 static NSString* const ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY = @"DefaultRouteInterfaceV4";
 static NSString* const ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY = @"DefaultRouteInterfaceV6";
-static NSString* const ROUTE_BACKUP_DEFAULT_ROUTE_SWITCHED_KEY = @"DefaultRouteSwitched";
 static NSString* const ROUTE_BACKUP_WHITELIST_ROUTES_KEY = @"WhitelistRoutes";
+static NSString* const ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY = @"IPv4TakeoverRoutes";
 static NSString* const ROUTE_BACKUP_LAST_ERROR_KEY = @"LastError";
 static NSString* const ROUTE_BACKUP_SESSION_TYPE_KEY = @"SessionType";
 static NSString* const ROUTE_BACKUP_SESSION_OWNER_KEY = @"SessionOwner";
@@ -55,6 +54,7 @@ static NSString* const SESSION_OWNER_EXTERNAL = @"external";
 static NSString* const CONTROL_PLANE_NONE = @"none";
 static NSString* const CONTROL_PLANE_SOCKET = @"socket";
 static NSString* const CONTROL_PLANE_STATELESS = @"stateless";
+static NSArray<NSString*>* const IPv4TakeoverCIDRs = @[@"0.0.0.0/1", @"128.0.0.0/1"];
 
 static NSString* const ROUTE_STORE_VERSION_KEY = @"Version";
 static NSString* const ROUTE_STORE_ENTRIES_KEY = @"Entries";
@@ -83,10 +83,11 @@ static NSString* defaultRouteGatewayV4 = @"";
 static NSString* defaultRouteGatewayV6 = @"";
 static NSString* defaultRouteInterfaceV4 = @"";
 static NSString* defaultRouteInterfaceV6 = @"";
-static BOOL didSwitchDefaultRouteToTun = NO;
 static int controlServerSocketFD = -1;
+static int tunSessionLockFD = -1;
 static NSString* activeTunName = @"";
 static NSMutableDictionary<NSString*, NSDictionary*>* activeWhitelistRoutes;
+static NSMutableArray<NSDictionary*>* activeIPv4TakeoverRoutes;
 static Tun2socksTun2socksCtl* tunControl = nil;
 
 static NSString* appSupportPath(void);
@@ -95,6 +96,9 @@ static BOOL ensureAppSupportDirectory(void);
 static NSURL* routeBackupFileURL(void);
 static NSURL* routeStoreFileURL(void);
 static NSString* controlSocketPath(void);
+static NSString* tunSessionLockPath(void);
+static BOOL acquireTunSessionLock(NSString** errorMessage);
+static void releaseTunSessionLock(void);
 static NSDictionary* makeResponse(BOOL ok, NSString* message, NSDictionary* payload);
 static void printResponse(NSDictionary* response, BOOL asJSON);
 static BOOL shouldOutputJSON(NSArray<NSString*>* arguments);
@@ -118,6 +122,7 @@ static BOOL runProxySaveMode(void);
 static BOOL applySystemProxyMode(NSString* mode, NSDictionary* originalSets, int localPort, int httpPort);
 static NSMutableDictionary* loadRouteBackup(void);
 static BOOL saveRouteBackup(NSMutableDictionary* backup);
+static NSMutableDictionary* sanitizeLegacyRouteBackup(NSMutableDictionary* backup);
 static NSMutableDictionary* loadRouteStore(void);
 static BOOL saveRouteStore(NSDictionary* store);
 static NSString* familyStringForFamily(SYSRouteAddressFamily family);
@@ -130,6 +135,8 @@ static BOOL replaceStoreEntries(NSArray<NSDictionary*>* entries);
 static NSDictionary* addEntriesToStore(NSArray<NSDictionary*>* entries);
 static NSDictionary* removeEntriesFromStore(NSArray<NSDictionary*>* entries);
 static NSDictionary* clearStoreEntries(void);
+static NSArray<NSDictionary*>* activeIPv4TakeoverRouteEntries(void);
+static void updateRouteBackupTakeoverRoutes(NSMutableDictionary* backup);
 static NSDictionary* tunStatusPayload(void);
 static NSDictionary* routeListPayload(void);
 static NSDictionary* sendRequestToControlServer(NSDictionary* request, NSString** errorMessage);
@@ -148,24 +155,20 @@ static BOOL setupTunSession(int localProxyPort, NSString** errorMessage);
 static BOOL activateExternalTunSession(NSString* tunName, NSString** errorMessage);
 static NSDictionary* allocateTunFDSession(NSString* tunName, int sendSocketFD);
 static NSDictionary* deactivateExternalTunSession(NSString* expectedTunName);
-static BOOL switchDefaultRouteToTun(NSString* tunName, NSMutableDictionary* backup, NSString** errorMessage);
+static BOOL installIPv4TakeoverRoutes(NSString* tunName, NSMutableDictionary* backup, NSString** errorMessage);
+static BOOL removeIPv4TakeoverRoutes(NSString* tunName, NSString** errorMessage);
 static BOOL loadDefaultRouteBaseline(NSString** errorMessage);
 static BOOL startControlSocketServer(NSString** errorMessage);
 static void controlSocketAcceptLoop(void);
 static NSDictionary* processServerRequest(NSDictionary* request);
-static BOOL restoreDefaultRouting(void);
 static void syncRuntimeSessionFromBackup(void);
 static void syncRuntimeRouteBaselineFromBackup(void);
 static BOOL isTunManagedIPv4Route(NSString* gateway, NSString* interfaceName);
 static BOOL hasUsableIPv4Baseline(void);
-static BOOL restoreDefaultRoutingAndPersist(NSMutableDictionary* routeBackup);
+static void resetTunRuntimeState(NSMutableDictionary* routeBackup, NSString* state, NSString* lastError);
 static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state, NSString* lastError);
-static void preserveBaselineRouteBackupValues(NSMutableDictionary* backup);
-static BOOL preferredDefaultRouteMatchesBaseline(NSDictionary* preferredRoute);
-static BOOL preferredDefaultRouteMatchesTarget(NSDictionary* preferredRoute, NSString* tunName);
-static BOOL defaultRouteListContainsBaseline(NSArray<NSDictionary*>* routes);
-static BOOL ensurePreferredDefaultRouteMatchesBaseline(void);
-static NSDictionary* primaryBaselineDefaultRoute(void);
+static void hydrateBaselineRuntimeFromBackup(NSMutableDictionary* backup);
+static NSDictionary* preferredNonTunDefaultRoute(void);
 static void updateRouteBackupRoutes(NSMutableDictionary* backup);
 static NSArray<NSString*>* ipLiteralAddressesFromPath(NSString* path);
 static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments);
@@ -205,6 +208,60 @@ static NSURL* routeStoreFileURL(void) {
 
 static NSString* controlSocketPath(void) {
     return [[appSupportFileURL(TunControlSocketFilename) path] copy];
+}
+
+static NSString* tunSessionLockPath(void) {
+    return [[appSupportFileURL(TunSessionLockFilename) path] copy];
+}
+
+static BOOL acquireTunSessionLock(NSString** errorMessage) {
+    if (tunSessionLockFD != -1) {
+        return YES;
+    }
+    ensureAppSupportDirectory();
+    NSString* lockPath = tunSessionLockPath();
+    const char* lockPathFS = [lockPath fileSystemRepresentation];
+    for (NSInteger attempt = 0; attempt < 2; attempt++) {
+        int fd = open(lockPathFS, O_CREAT | O_EXCL | O_RDWR, 0600);
+        if (fd != -1) {
+            NSString* pidString = [NSString stringWithFormat:@"%d\n", getpid()];
+            write(fd, [pidString UTF8String], (unsigned int)[pidString lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+            tunSessionLockFD = fd;
+            return YES;
+        }
+        if (errno != EEXIST) {
+            if (errorMessage != NULL) {
+                *errorMessage = @"Failed to create tun session lock file.";
+            }
+            return NO;
+        }
+
+        NSData* existingData = [NSData dataWithContentsOfFile:lockPath];
+        NSString* existingText = existingData != nil ? [[NSString alloc] initWithData:existingData encoding:NSUTF8StringEncoding] : nil;
+        pid_t existingPID = (pid_t)[existingText integerValue];
+        if (existingPID > 0 && kill(existingPID, 0) == 0) {
+            if (errorMessage != NULL) {
+                *errorMessage = [NSString stringWithFormat:@"Another tun session is already running (pid %d).", existingPID];
+            }
+            return NO;
+        }
+
+        unlink(lockPathFS);
+    }
+    if (errorMessage != NULL) {
+        *errorMessage = @"Another tun session operation is already in progress.";
+    }
+    return NO;
+}
+
+static void releaseTunSessionLock(void) {
+    if (tunSessionLockFD == -1) {
+        return;
+    }
+    NSString* lockPath = tunSessionLockPath();
+    unlink([lockPath fileSystemRepresentation]);
+    close(tunSessionLockFD);
+    tunSessionLockFD = -1;
 }
 
 static NSDictionary* makeResponse(BOOL ok, NSString* message, NSDictionary* payload) {
@@ -529,6 +586,7 @@ static BOOL applySystemProxyMode(NSString* mode, NSDictionary* originalSets, int
 
 static NSMutableDictionary* loadRouteBackup(void) {
     NSMutableDictionary* backup = [NSMutableDictionary dictionaryWithContentsOfURL:routeBackupFileURL()] ?: [[NSMutableDictionary alloc] init];
+    backup = sanitizeLegacyRouteBackup(backup);
     backup[ROUTE_BACKUP_VERSION_KEY] = @2;
     if (backup[ROUTE_BACKUP_STATE_KEY] == nil) {
         backup[ROUTE_BACKUP_STATE_KEY] = ROUTE_BACKUP_STATE_IDLE;
@@ -548,11 +606,11 @@ static NSMutableDictionary* loadRouteBackup(void) {
     if (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] == nil) {
         backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] = @"";
     }
-    if (backup[ROUTE_BACKUP_DEFAULT_ROUTE_SWITCHED_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_ROUTE_SWITCHED_KEY] = @NO;
-    }
     if (backup[ROUTE_BACKUP_WHITELIST_ROUTES_KEY] == nil) {
         backup[ROUTE_BACKUP_WHITELIST_ROUTES_KEY] = @[];
+    }
+    if (backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] == nil) {
+        backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] = @[];
     }
     if (backup[ROUTE_BACKUP_LAST_ERROR_KEY] == nil) {
         backup[ROUTE_BACKUP_LAST_ERROR_KEY] = @"";
@@ -571,7 +629,28 @@ static NSMutableDictionary* loadRouteBackup(void) {
 
 static BOOL saveRouteBackup(NSMutableDictionary* backup) {
     ensureAppSupportDirectory();
+    backup = sanitizeLegacyRouteBackup(backup);
     return [backup writeToURL:routeBackupFileURL() atomically:NO];
+}
+
+static NSMutableDictionary* sanitizeLegacyRouteBackup(NSMutableDictionary* backup) {
+    if (backup == nil) {
+        return [[NSMutableDictionary alloc] init];
+    }
+
+    id legacyDefaultGateway = backup[@"DefaultRouteGateway"];
+    if (![backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] isKindOfClass:[NSString class]] || [backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] length] == 0) {
+        if ([legacyDefaultGateway isKindOfClass:[NSString class]] && [legacyDefaultGateway length] > 0) {
+            backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] = legacyDefaultGateway;
+        }
+    }
+
+    NSArray<NSString*>* legacyKeys = @[@"DefaultRouteGateway", @"DefaultRouteSwitched"];
+    for (NSString* key in legacyKeys) {
+        [backup removeObjectForKey:key];
+    }
+
+    return backup;
 }
 
 static NSMutableDictionary* loadRouteStore(void) {
@@ -732,6 +811,21 @@ static NSDictionary* clearStoreEntries(void) {
     return makeResponse(YES, @"Route whitelist store cleared.", @{@"removed": previousEntries});
 }
 
+static NSArray<NSDictionary*>* activeIPv4TakeoverRouteEntries(void) {
+    if (activeIPv4TakeoverRoutes != nil) {
+        return [activeIPv4TakeoverRoutes copy];
+    }
+    NSArray* storedEntries = loadRouteBackup()[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY];
+    return [storedEntries isKindOfClass:[NSArray class]] ? storedEntries : @[];
+}
+
+static void updateRouteBackupTakeoverRoutes(NSMutableDictionary* backup) {
+    if (backup == nil) {
+        return;
+    }
+    backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] = activeIPv4TakeoverRoutes != nil ? [activeIPv4TakeoverRoutes copy] : @[];
+}
+
 static NSDictionary* tunStatusPayload(void) {
     NSMutableDictionary* backup = loadRouteBackup();
     NSArray* persistedEntries = storeEntries();
@@ -747,9 +841,7 @@ static NSDictionary* tunStatusPayload(void) {
         tunExists = [taskResult[@"status"] intValue] == 0;
         tunUp = tunExists && [ifconfigOutput containsString:@"<UP,"];
     }
-    NSString* currentGatewayV4 = [routeHelper getDefaultRouteGatewayForFamily:SYSRouteAddressFamilyIPv4] ?: @"";
-    NSString* currentInterfaceV4 = [routeHelper getDefaultRouteInterfaceForFamily:SYSRouteAddressFamilyIPv4] ?: @"";
-    BOOL defaultRouteManagedByTun = isTunManagedIPv4Route(currentGatewayV4, currentInterfaceV4);
+    NSArray* activeTakeoverEntries = activeIPv4TakeoverRouteEntries();
     return @{
         @"sessionType": currentSessionType(),
         @"sessionOwner": currentSessionOwner(),
@@ -763,10 +855,7 @@ static NSDictionary* tunStatusPayload(void) {
         @"defaultGatewayV6": defaultRouteGatewayV6.length > 0 ? defaultRouteGatewayV6 : (backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] ?: @""),
         @"defaultInterfaceV4": defaultRouteInterfaceV4.length > 0 ? defaultRouteInterfaceV4 : (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] ?: @""),
         @"defaultInterfaceV6": defaultRouteInterfaceV6.length > 0 ? defaultRouteInterfaceV6 : (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] ?: @""),
-        @"currentDefaultGatewayV4": currentGatewayV4,
-        @"currentDefaultInterfaceV4": currentInterfaceV4,
-        @"defaultRouteSwitched": @(didSwitchDefaultRouteToTun || [backup[ROUTE_BACKUP_DEFAULT_ROUTE_SWITCHED_KEY] boolValue]),
-        @"defaultRouteManagedByTun": @(defaultRouteManagedByTun),
+        @"ipv4TakeoverRoutes": activeTakeoverEntries ?: @[],
         @"whitelistPersistedCount": @([persistedEntries count]),
         @"whitelistAppliedCount": @(appliedCount),
         @"lastError": backup[ROUTE_BACKUP_LAST_ERROR_KEY] ?: @"",
@@ -795,14 +884,13 @@ static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state,
     if (backup == nil) {
         return;
     }
-    preserveBaselineRouteBackupValues(backup);
+    hydrateBaselineRuntimeFromBackup(backup);
     backup[ROUTE_BACKUP_STATE_KEY] = state ?: ROUTE_BACKUP_STATE_IDLE;
     backup[ROUTE_BACKUP_TUN_NAME_KEY] = activeTunName ?: @"";
     backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] = defaultRouteGatewayV4 ?: @"";
     backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] = defaultRouteGatewayV6 ?: @"";
     backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] = defaultRouteInterfaceV4 ?: @"";
     backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] = defaultRouteInterfaceV6 ?: @"";
-    backup[ROUTE_BACKUP_DEFAULT_ROUTE_SWITCHED_KEY] = @(didSwitchDefaultRouteToTun);
     backup[ROUTE_BACKUP_LAST_ERROR_KEY] = lastError ?: @"";
     if (activeTunName.length == 0) {
         backup[ROUTE_BACKUP_SESSION_TYPE_KEY] = SESSION_TYPE_NONE;
@@ -810,10 +898,11 @@ static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state,
         backup[ROUTE_BACKUP_CONTROL_PLANE_KEY] = CONTROL_PLANE_NONE;
     }
     updateRouteBackupRoutes(backup);
+    updateRouteBackupTakeoverRoutes(backup);
     saveRouteBackup(backup);
 }
 
-static void preserveBaselineRouteBackupValues(NSMutableDictionary* backup) {
+static void hydrateBaselineRuntimeFromBackup(NSMutableDictionary* backup) {
     if (backup == nil) {
         return;
     }
@@ -937,13 +1026,20 @@ static NSDictionary* syncActiveWhitelistWithEntries(NSArray<NSDictionary*>* entr
 
 static NSDictionary* stopTunSession(void) {
     syncRuntimeSessionFromBackup();
+    NSString* lockError = nil;
+    if (!acquireTunSessionLock(&lockError)) {
+        return makeResponse(NO, lockError ?: @"Another tun session operation is already in progress.", nil);
+    }
     NSMutableArray* removedEntries = [[NSMutableArray alloc] init];
     NSMutableArray* failedEntries = [[NSMutableArray alloc] init];
     if (activeWhitelistRoutes != nil) {
         removeWhitelistEntries([activeWhitelistRoutes allValues], removedEntries, failedEntries);
     }
     NSMutableDictionary* backup = loadRouteBackup();
-    BOOL restored = restoreDefaultRoutingAndPersist(backup);
+    NSString* routeError = nil;
+    BOOL removedTakeover = removeIPv4TakeoverRoutes(activeTunName, &routeError);
+    resetTunRuntimeState(backup, ROUTE_BACKUP_STATE_IDLE, @"");
+    BOOL restored = YES;
     if (controlServerSocketFD != -1) {
         close(controlServerSocketFD);
         controlServerSocketFD = -1;
@@ -951,7 +1047,12 @@ static NSDictionary* stopTunSession(void) {
     unlink([controlSocketPath() fileSystemRepresentation]);
     activeTunName = @"";
     runLoopMark = NO;
-    return makeResponse(restored && failedEntries.count == 0, restored ? @"Tun session stopped." : @"Failed to fully restore tun session.", @{@"removed": removedEntries, @"failed": failedEntries});
+    releaseTunSessionLock();
+    if (!removedTakeover && routeError.length > 0) {
+        backup[ROUTE_BACKUP_LAST_ERROR_KEY] = routeError;
+        saveRouteBackup(backup);
+    }
+    return makeResponse(restored && removedTakeover && failedEntries.count == 0, (restored && removedTakeover) ? @"Tun session stopped." : @"Failed to fully restore tun session.", @{@"removed": removedEntries, @"failed": failedEntries, @"takeoverRemoved": @(removedTakeover)});
 }
 
 static NSDictionary* allocateTunFDSession(NSString* tunName, int sendSocketFD) {
@@ -1187,10 +1288,22 @@ static BOOL isExternalFDSession(void) {
 }
 
 static BOOL setupTunSession(int localProxyPort, NSString** errorMessage) {
+    if (!acquireTunSessionLock(errorMessage)) {
+        return NO;
+    }
+    syncRuntimeSessionFromBackup();
+    if (![currentSessionState() isEqualToString:@"inactive"]) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"A tun session is already active.";
+        }
+        releaseTunSessionLock();
+        return NO;
+    }
     if (!applySystemProxyMode(@"off", nil, 0, 0)) {
         if (errorMessage != NULL) {
             *errorMessage = @"Failed to disable existing system proxy before enabling tun mode.";
         }
+        releaseTunSessionLock();
         return NO;
     }
     NSString* socks5ProxyLink = [NSString stringWithFormat:@"socks5://127.0.0.1:%d", localProxyPort];
@@ -1200,10 +1313,12 @@ static BOOL setupTunSession(int localProxyPort, NSString** errorMessage) {
         if (errorMessage != NULL) {
             *errorMessage = err.localizedDescription ?: @"Failed to create tun2socks session.";
         }
+        releaseTunSessionLock();
         return NO;
     }
     activeTunName = tunControl.tunName;
     if (!loadDefaultRouteBaseline(errorMessage)) {
+        releaseTunSessionLock();
         return NO;
     }
     NSMutableDictionary* backup = loadRouteBackup();
@@ -1212,10 +1327,12 @@ static BOOL setupTunSession(int localProxyPort, NSString** errorMessage) {
         if (errorMessage != NULL) {
             *errorMessage = @"Failed to bring up tun interface.";
         }
+        releaseTunSessionLock();
         return NO;
     }
-    if (!switchDefaultRouteToTun(activeTunName, backup, errorMessage)) {
-        restoreDefaultRoutingAndPersist(backup);
+    if (!installIPv4TakeoverRoutes(activeTunName, backup, errorMessage)) {
+        resetTunRuntimeState(backup, ROUTE_BACKUP_STATE_IDLE, @"");
+        releaseTunSessionLock();
         return NO;
     }
     updateRouteBackupState(backup, ROUTE_BACKUP_STATE_ACTIVE, @"");
@@ -1227,20 +1344,34 @@ static BOOL setupTunSession(int localProxyPort, NSString** errorMessage) {
 }
 
 static BOOL activateExternalTunSession(NSString* tunName, NSString** errorMessage) {
+    if (!acquireTunSessionLock(errorMessage)) {
+        return NO;
+    }
+    syncRuntimeSessionFromBackup();
+    if (![currentSessionState() isEqualToString:@"inactive"]) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"A tun session is already active.";
+        }
+        releaseTunSessionLock();
+        return NO;
+    }
     if (tunName == nil || tunName.length == 0) {
         if (errorMessage != NULL) {
             *errorMessage = @"Missing utun interface name.";
         }
+        releaseTunSessionLock();
         return NO;
     }
     if (!applySystemProxyMode(@"off", nil, 0, 0)) {
         if (errorMessage != NULL) {
             *errorMessage = @"Failed to disable existing system proxy before enabling tun mode.";
         }
+        releaseTunSessionLock();
         return NO;
     }
     activeTunName = tunName;
     if (!loadDefaultRouteBaseline(errorMessage)) {
+        releaseTunSessionLock();
         return NO;
     }
     NSMutableDictionary* backup = loadRouteBackup();
@@ -1250,11 +1381,13 @@ static BOOL activateExternalTunSession(NSString* tunName, NSString** errorMessag
             *errorMessage = @"Failed to bring up tun interface.";
         }
         activeTunName = @"";
+        releaseTunSessionLock();
         return NO;
     }
-    if (!switchDefaultRouteToTun(activeTunName, backup, errorMessage)) {
-        restoreDefaultRoutingAndPersist(backup);
+    if (!installIPv4TakeoverRoutes(activeTunName, backup, errorMessage)) {
+        resetTunRuntimeState(backup, ROUTE_BACKUP_STATE_IDLE, @"");
         activeTunName = @"";
+        releaseTunSessionLock();
         return NO;
     }
     updateRouteBackupState(backup, ROUTE_BACKUP_STATE_ACTIVE, @"");
@@ -1267,6 +1400,7 @@ static BOOL activateExternalTunSession(NSString* tunName, NSString** errorMessag
         if (errorMessage != NULL) {
             *errorMessage = syncResponse[@"message"] ?: @"Failed to synchronize whitelist routes.";
         }
+        releaseTunSessionLock();
         return NO;
     }
     return YES;
@@ -1274,7 +1408,7 @@ static BOOL activateExternalTunSession(NSString* tunName, NSString** errorMessag
 
 static BOOL loadDefaultRouteBaseline(NSString** errorMessage) {
     syncRuntimeSessionFromBackup();
-    NSDictionary* preferredDefaultRouteV4 = primaryBaselineDefaultRoute();
+    NSDictionary* preferredDefaultRouteV4 = preferredNonTunDefaultRoute();
     defaultRouteGatewayV4 = preferredDefaultRouteV4[@"gateway"] ?: @"";
     defaultRouteGatewayV6 = [routeHelper getDefaultRouteGatewayForFamily:SYSRouteAddressFamilyIPv6] ?: @"";
     defaultRouteInterfaceV4 = preferredDefaultRouteV4[@"interface"] ?: @"";
@@ -1295,7 +1429,7 @@ static BOOL loadDefaultRouteBaseline(NSString** errorMessage) {
 
     if (!hasUsableIPv4Baseline()) {
         NSMutableDictionary* backup = loadRouteBackup();
-        preserveBaselineRouteBackupValues(backup);
+        hydrateBaselineRuntimeFromBackup(backup);
     }
 
     if (!hasUsableIPv4Baseline()) {
@@ -1308,171 +1442,55 @@ static BOOL loadDefaultRouteBaseline(NSString** errorMessage) {
     return YES;
 }
 
-static BOOL switchDefaultRouteToTun(NSString* tunName, NSMutableDictionary* backup, NSString** errorMessage) {
-    NSArray<NSDictionary*>* previousDefaults = [routeHelper defaultRoutesForFamily:SYSRouteAddressFamilyIPv4];
-    BOOL removedCurrentDefault = NO;
-    NSArray<NSDictionary*>* currentDefaults = previousDefaults;
-    if (currentDefaults.count == 0) {
-        removedCurrentDefault = [routeHelper deleteDefaultRouteForFamily:SYSRouteAddressFamilyIPv4];
-    } else {
-        removedCurrentDefault = YES;
-        for (NSDictionary* route in currentDefaults) {
-            NSString* gateway = route[@"gateway"] ?: @"";
-            NSString* interfaceName = route[@"interface"] ?: @"";
-            BOOL removed = NO;
-            if ([routeHelper isValidGateway:gateway]) {
-                removed = [routeHelper deleteDefaultRouteViaGateway:gateway family:SYSRouteAddressFamilyIPv4];
-            } else if (interfaceName.length > 0) {
-                removed = [routeHelper deleteDefaultRouteViaInterface:interfaceName family:SYSRouteAddressFamilyIPv4];
-            }
-            removedCurrentDefault = removed && removedCurrentDefault;
-        }
-    }
-    if (!removedCurrentDefault) {
+static BOOL installIPv4TakeoverRoutes(NSString* tunName, NSMutableDictionary* backup, NSString** errorMessage) {
+    if (tunName.length == 0) {
         if (errorMessage != NULL) {
-            *errorMessage = @"Failed to remove current default route.";
+            *errorMessage = @"Missing tun interface for IPv4 takeover routes.";
         }
         return NO;
     }
-
-    didSwitchDefaultRouteToTun = [routeHelper addDefaultRouteViaInterface:tunName family:SYSRouteAddressFamilyIPv4];
-    if (!didSwitchDefaultRouteToTun) {
-        // Some macOS builds reject interface-only default routes for utun; fall back to the tun gateway route.
-        didSwitchDefaultRouteToTun = [routeHelper addDefaultRouteViaGateway:tunWg family:SYSRouteAddressFamilyIPv4];
-    }
-
-    if (!didSwitchDefaultRouteToTun) {
-        if (errorMessage != NULL) {
-            *errorMessage = @"Failed to switch default route to tun interface or gateway.";
-        }
-        if (backup != nil) {
-            updateRouteBackupState(backup, ROUTE_BACKUP_STATE_SWITCHING, @"default route switch failed");
-        }
-        return NO;
-    }
-
-    NSArray<NSDictionary*>* resultingDefaults = @[];
-    BOOL targetDefaultPresent = NO;
-    BOOL preferredIsTarget = NO;
-    for (NSInteger attempt = 0; attempt < 5; attempt++) {
-        usleep(200000);
-        resultingDefaults = [routeHelper defaultRoutesForFamily:SYSRouteAddressFamilyIPv4];
-        targetDefaultPresent = [routeHelper hasDefaultRouteViaInterface:tunName family:SYSRouteAddressFamilyIPv4] || [routeHelper hasDefaultRouteViaGateway:tunWg family:SYSRouteAddressFamilyIPv4];
-        preferredIsTarget = preferredDefaultRouteMatchesTarget([routeHelper preferredDefaultRouteForFamily:SYSRouteAddressFamilyIPv4], tunName);
-        if (targetDefaultPresent && preferredIsTarget) {
-            break;
-        }
-    }
-    if (!targetDefaultPresent || !preferredIsTarget) {
-        if (errorMessage != NULL) {
-            *errorMessage = @"Failed to make tun route the preferred default route.";
-        }
-        if (backup != nil) {
-            updateRouteBackupState(backup, ROUTE_BACKUP_STATE_SWITCHING, @"default route validation failed");
-        }
-        for (NSDictionary* route in resultingDefaults) {
-            NSString* gateway = route[@"gateway"] ?: @"";
-            NSString* interfaceName = route[@"interface"] ?: @"";
-            if ([routeHelper isValidGateway:gateway] && [gateway isEqualToString:tunWg]) {
-                [routeHelper deleteDefaultRouteViaGateway:gateway family:SYSRouteAddressFamilyIPv4];
-            } else if (interfaceName.length > 0 && [interfaceName isEqualToString:tunName]) {
-                [routeHelper deleteDefaultRouteViaInterface:interfaceName family:SYSRouteAddressFamilyIPv4];
+    activeIPv4TakeoverRoutes = [[NSMutableArray alloc] init];
+    for (NSString* cidr in IPv4TakeoverCIDRs) {
+        if (![routeHelper addNetworkRouteToDestination:cidr interface:tunName family:SYSRouteAddressFamilyIPv4]) {
+            if (errorMessage != NULL) {
+                *errorMessage = [NSString stringWithFormat:@"Failed to install IPv4 takeover route %@.", cidr];
             }
-        }
-        for (NSDictionary* route in previousDefaults) {
-            NSString* gateway = route[@"gateway"] ?: @"";
-            NSString* interfaceName = route[@"interface"] ?: @"";
-            if ([routeHelper isValidGateway:gateway]) {
-                [routeHelper addDefaultRouteViaGateway:gateway family:SYSRouteAddressFamilyIPv4];
-            } else if (interfaceName.length > 0) {
-                [routeHelper addDefaultRouteViaInterface:interfaceName family:SYSRouteAddressFamilyIPv4];
+            if (backup != nil) {
+                updateRouteBackupState(backup, ROUTE_BACKUP_STATE_SWITCHING, @"ipv4 takeover install failed");
             }
+            return NO;
         }
-        didSwitchDefaultRouteToTun = NO;
-        return NO;
+        [activeIPv4TakeoverRoutes addObject:@{@"cidr": cidr, @"interface": tunName, @"family": @"ipv4"}];
     }
-
+    updateRouteBackupTakeoverRoutes(backup);
     return YES;
 }
 
-static BOOL restoreDefaultRouting(void) {
+static BOOL removeIPv4TakeoverRoutes(NSString* tunName, NSString** errorMessage) {
     BOOL ok = YES;
-    syncRuntimeSessionFromBackup();
-    syncRuntimeRouteBaselineFromBackup();
-
-    NSArray<NSDictionary*>* currentDefaults = nil;
-    currentDefaults = [routeHelper defaultRoutesForFamily:SYSRouteAddressFamilyIPv4];
-    for (NSDictionary* route in currentDefaults) {
-        NSString* gateway = route[@"gateway"] ?: @"";
-        NSString* interfaceName = route[@"interface"] ?: @"";
-        if (activeTunName.length > 0 && [interfaceName isEqualToString:activeTunName]) {
-            BOOL removed = [routeHelper deleteDefaultRouteViaInterface:interfaceName family:SYSRouteAddressFamilyIPv4];
-            ok = removed && ok;
-            continue;
-        }
-        if ([gateway isEqualToString:tunWg]) {
-            BOOL removed = [routeHelper deleteDefaultRouteViaGateway:gateway family:SYSRouteAddressFamilyIPv4];
-            ok = removed && ok;
-        }
-    }
-
-    for (NSInteger attempt = 0; attempt < 4; attempt++) {
-        NSString* currentGateway = [routeHelper getDefaultRouteGatewayForFamily:SYSRouteAddressFamilyIPv4] ?: @"";
-        NSString* currentInterface = [routeHelper getDefaultRouteInterfaceForFamily:SYSRouteAddressFamilyIPv4] ?: @"";
-        if (!isTunManagedIPv4Route(currentGateway, currentInterface)) {
-            break;
-        }
-
+    NSArray<NSDictionary*>* takeoverEntries = activeIPv4TakeoverRouteEntries();
+    for (NSDictionary* entry in takeoverEntries) {
+        NSString* cidr = entry[@"cidr"] ?: @"";
+        NSString* entryInterface = entry[@"interface"] ?: tunName ?: @"";
         BOOL removed = NO;
-        if (activeTunName.length > 0 && [routeHelper hasDefaultRouteViaInterface:activeTunName family:SYSRouteAddressFamilyIPv4]) {
-            removed = [routeHelper deleteDefaultRouteViaInterface:activeTunName family:SYSRouteAddressFamilyIPv4] || removed;
+        if (entryInterface.length > 0) {
+            removed = [routeHelper deleteNetworkRouteToDestination:cidr interface:entryInterface family:SYSRouteAddressFamilyIPv4];
+        } else {
+            removed = YES;
         }
-        if ([routeHelper hasDefaultRouteViaGateway:tunWg family:SYSRouteAddressFamilyIPv4]) {
-            removed = [routeHelper deleteDefaultRouteViaGateway:tunWg family:SYSRouteAddressFamilyIPv4] || removed;
-        }
-        if (!removed) {
-            removed = [routeHelper deleteDefaultRouteForFamily:SYSRouteAddressFamilyIPv4] || removed;
+        if (!removed && defaultRouteGatewayV4.length > 0) {
+            removed = [routeHelper deleteNetworkRouteToDestination:cidr gateway:defaultRouteGatewayV4 family:SYSRouteAddressFamilyIPv4];
         }
         ok = removed && ok;
-        if (!removed) {
-            break;
+        if (!removed && errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"Failed to remove IPv4 takeover route %@.", cidr];
         }
     }
-
-    currentDefaults = [routeHelper defaultRoutesForFamily:SYSRouteAddressFamilyIPv4];
-    if (!defaultRouteListContainsBaseline(currentDefaults)) {
-        if (defaultRouteGatewayV4.length > 0) {
-            ok = [routeHelper addDefaultRouteViaGateway:defaultRouteGatewayV4 family:SYSRouteAddressFamilyIPv4] && ok;
-        } else if (defaultRouteInterfaceV4.length > 0) {
-            ok = [routeHelper addDefaultRouteViaInterface:defaultRouteInterfaceV4 family:SYSRouteAddressFamilyIPv4] && ok;
-        } else {
-            ok = NO;
-        }
+    if (activeIPv4TakeoverRoutes == nil) {
+        activeIPv4TakeoverRoutes = [[NSMutableArray alloc] init];
+    } else {
+        [activeIPv4TakeoverRoutes removeAllObjects];
     }
-
-    BOOL baselineRestored = NO;
-    for (NSInteger attempt = 0; attempt < 5; attempt++) {
-        usleep(200000);
-        currentDefaults = [routeHelper defaultRoutesForFamily:SYSRouteAddressFamilyIPv4];
-        NSLog(@"restore attempt %ld defaults=%@ baselineGateway=%@ baselineInterface=%@", (long)attempt, currentDefaults, defaultRouteGatewayV4, defaultRouteInterfaceV4);
-        if (!defaultRouteListContainsBaseline(currentDefaults)) {
-            if (defaultRouteGatewayV4.length > 0) {
-                BOOL added = [routeHelper addDefaultRouteViaGateway:defaultRouteGatewayV4 family:SYSRouteAddressFamilyIPv4];
-                NSLog(@"restore add gateway %@ => %@", defaultRouteGatewayV4, added ? @"ok" : @"failed");
-            } else if (defaultRouteInterfaceV4.length > 0) {
-                BOOL added = [routeHelper addDefaultRouteViaInterface:defaultRouteInterfaceV4 family:SYSRouteAddressFamilyIPv4];
-                NSLog(@"restore add interface %@ => %@", defaultRouteInterfaceV4, added ? @"ok" : @"failed");
-            }
-            continue;
-        }
-        if (ensurePreferredDefaultRouteMatchesBaseline()) {
-            baselineRestored = YES;
-            break;
-        }
-    }
-
-    ok = baselineRestored && ok;
-    didSwitchDefaultRouteToTun = NO;
     return ok;
 }
 
@@ -1481,8 +1499,9 @@ static void syncRuntimeSessionFromBackup(void) {
     if (activeTunName.length == 0) {
         activeTunName = backup[ROUTE_BACKUP_TUN_NAME_KEY] ?: @"";
     }
-    if (!didSwitchDefaultRouteToTun) {
-        didSwitchDefaultRouteToTun = [backup[ROUTE_BACKUP_DEFAULT_ROUTE_SWITCHED_KEY] boolValue];
+    if (activeIPv4TakeoverRoutes == nil) {
+        NSArray* storedRoutes = backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY];
+        activeIPv4TakeoverRoutes = [storedRoutes isKindOfClass:[NSArray class]] ? [storedRoutes mutableCopy] : [[NSMutableArray alloc] init];
     }
 }
 
@@ -1519,90 +1538,7 @@ static BOOL hasUsableIPv4Baseline(void) {
     return (defaultRouteGatewayV4.length > 0 && [routeHelper isValidGateway:defaultRouteGatewayV4]) || defaultRouteInterfaceV4.length > 0;
 }
 
-static BOOL defaultRouteListContainsBaseline(NSArray<NSDictionary*>* routes) {
-    for (NSDictionary* route in routes) {
-        NSString* gateway = route[@"gateway"] ?: @"";
-        NSString* interfaceName = route[@"interface"] ?: @"";
-        BOOL gatewayMatches = defaultRouteGatewayV4.length > 0 && [gateway isEqualToString:defaultRouteGatewayV4];
-        BOOL interfaceMatches = defaultRouteInterfaceV4.length > 0 && [interfaceName isEqualToString:defaultRouteInterfaceV4];
-        if (defaultRouteGatewayV4.length > 0 && defaultRouteInterfaceV4.length > 0 && gatewayMatches && interfaceMatches) {
-            return YES;
-        }
-        if (defaultRouteGatewayV4.length > 0 && gatewayMatches) {
-            return YES;
-        }
-        if (defaultRouteGatewayV4.length == 0 && interfaceMatches) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-static BOOL preferredDefaultRouteMatchesBaseline(NSDictionary* preferredRoute) {
-    NSString* gateway = preferredRoute[@"gateway"] ?: @"";
-    NSString* interfaceName = preferredRoute[@"interface"] ?: @"";
-    if (defaultRouteGatewayV4.length > 0 && defaultRouteInterfaceV4.length > 0) {
-        return [gateway isEqualToString:defaultRouteGatewayV4] && [interfaceName isEqualToString:defaultRouteInterfaceV4];
-    }
-    if (defaultRouteGatewayV4.length > 0) {
-        return [gateway isEqualToString:defaultRouteGatewayV4];
-    }
-    if (defaultRouteInterfaceV4.length > 0) {
-        return [interfaceName isEqualToString:defaultRouteInterfaceV4];
-    }
-    return NO;
-}
-
-static BOOL preferredDefaultRouteMatchesTarget(NSDictionary* preferredRoute, NSString* tunName) {
-    NSString* gateway = preferredRoute[@"gateway"] ?: @"";
-    NSString* interfaceName = preferredRoute[@"interface"] ?: @"";
-    return [interfaceName isEqualToString:tunName] || [gateway isEqualToString:tunWg];
-}
-
-static BOOL ensurePreferredDefaultRouteMatchesBaseline(void) {
-    NSDictionary* preferredRoute = [routeHelper preferredDefaultRouteForFamily:SYSRouteAddressFamilyIPv4];
-    if (preferredDefaultRouteMatchesBaseline(preferredRoute)) {
-        return YES;
-    }
-
-    NSDictionary* baselineRoute = primaryBaselineDefaultRoute();
-    NSString* baselineGateway = baselineRoute[@"gateway"] ?: defaultRouteGatewayV4;
-    NSString* baselineInterface = baselineRoute[@"interface"] ?: defaultRouteInterfaceV4;
-
-    if (baselineGateway.length > 0) {
-        BOOL added = [routeHelper addDefaultRouteViaGateway:baselineGateway family:SYSRouteAddressFamilyIPv4];
-        NSLog(@"ensure baseline gateway %@ add => %@", baselineGateway, added ? @"ok" : @"failed");
-        if (!added) {
-            return NO;
-        }
-    } else if (baselineInterface.length > 0) {
-        BOOL added = [routeHelper addDefaultRouteViaInterface:baselineInterface family:SYSRouteAddressFamilyIPv4];
-        NSLog(@"ensure baseline interface %@ add => %@", baselineInterface, added ? @"ok" : @"failed");
-        if (!added) {
-            return NO;
-        }
-    } else {
-        return NO;
-    }
-
-    for (NSInteger attempt = 0; attempt < 5; attempt++) {
-        usleep(200000);
-        preferredRoute = [routeHelper preferredDefaultRouteForFamily:SYSRouteAddressFamilyIPv4];
-        NSLog(@"ensure baseline preferred route attempt %ld => %@", (long)attempt, preferredRoute);
-        if (preferredDefaultRouteMatchesBaseline(preferredRoute)) {
-            return YES;
-        }
-        if (baselineGateway.length > 0) {
-            [routeHelper addDefaultRouteViaGateway:baselineGateway family:SYSRouteAddressFamilyIPv4];
-        } else if (baselineInterface.length > 0) {
-            [routeHelper addDefaultRouteViaInterface:baselineInterface family:SYSRouteAddressFamilyIPv4];
-        }
-    }
-
-    return NO;
-}
-
-static NSDictionary* primaryBaselineDefaultRoute(void) {
+static NSDictionary* preferredNonTunDefaultRoute(void) {
     NSArray<NSDictionary*>* defaults = [routeHelper defaultRoutesForFamily:SYSRouteAddressFamilyIPv4];
     for (NSDictionary* route in defaults) {
         NSString* interfaceName = route[@"interface"] ?: @"";
@@ -1621,31 +1557,32 @@ static NSDictionary* primaryBaselineDefaultRoute(void) {
     };
 }
 
-static BOOL restoreDefaultRoutingAndPersist(NSMutableDictionary* routeBackup) {
+static void resetTunRuntimeState(NSMutableDictionary* routeBackup, NSString* state, NSString* lastError) {
     syncRuntimeRouteBaselineFromBackup();
-    updateRouteBackupState(routeBackup, ROUTE_BACKUP_STATE_RESTORING, @"");
-    BOOL ok = restoreDefaultRouting();
-    if (ok) {
-        activeTunName = @"";
-        defaultRouteGatewayV4 = @"";
-        defaultRouteGatewayV6 = @"";
-        defaultRouteInterfaceV4 = @"";
-        defaultRouteInterfaceV6 = @"";
-        [activeWhitelistRoutes removeAllObjects];
-        updateRouteBackupState(routeBackup, ROUTE_BACKUP_STATE_IDLE, @"");
+    activeTunName = @"";
+    defaultRouteGatewayV4 = @"";
+    defaultRouteGatewayV6 = @"";
+    defaultRouteInterfaceV4 = @"";
+    defaultRouteInterfaceV6 = @"";
+    [activeWhitelistRoutes removeAllObjects];
+    if (activeIPv4TakeoverRoutes == nil) {
+        activeIPv4TakeoverRoutes = [[NSMutableArray alloc] init];
     } else {
-        routeBackup[ROUTE_BACKUP_LAST_ERROR_KEY] = @"restore default routing failed";
-        saveRouteBackup(routeBackup);
+        [activeIPv4TakeoverRoutes removeAllObjects];
     }
-    return ok;
+    updateRouteBackupState(routeBackup, state ?: ROUTE_BACKUP_STATE_IDLE, lastError ?: @"");
 }
 
 static NSString* currentSessionState(void) {
     NSMutableDictionary* backup = loadRouteBackup();
     NSString* state = activeTunName.length > 0 ? ROUTE_BACKUP_STATE_ACTIVE : backup[ROUTE_BACKUP_STATE_KEY];
     NSString* backupTunName = backup[ROUTE_BACKUP_TUN_NAME_KEY];
-    if ((state.length == 0 || [state isEqualToString:ROUTE_BACKUP_STATE_IDLE]) && ![currentSessionType() isEqualToString:SESSION_TYPE_NONE] && [backup[ROUTE_BACKUP_DEFAULT_ROUTE_SWITCHED_KEY] boolValue] && [backupTunName isKindOfClass:[NSString class]] && backupTunName.length > 0) {
+    NSArray* backupTakeoverRoutes = [backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] isKindOfClass:[NSArray class]] ? backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] : @[];
+    if ((state.length == 0 || [state isEqualToString:ROUTE_BACKUP_STATE_IDLE]) && ![currentSessionType() isEqualToString:SESSION_TYPE_NONE] && backupTakeoverRoutes.count > 0 && [backupTunName isKindOfClass:[NSString class]] && backupTunName.length > 0) {
         state = ROUTE_BACKUP_STATE_ACTIVE;
+    }
+    if ([state isEqualToString:ROUTE_BACKUP_STATE_SWITCHING] && [currentSessionType() isEqualToString:SESSION_TYPE_NONE] && [currentSessionOwner() isEqualToString:SESSION_OWNER_NONE] && [currentControlPlane() isEqualToString:CONTROL_PLANE_NONE] && backupTakeoverRoutes.count == 0) {
+        state = ROUTE_BACKUP_STATE_IDLE;
     }
     if (state.length == 0 || [state isEqualToString:ROUTE_BACKUP_STATE_IDLE]) {
         return @"inactive";
@@ -1739,7 +1676,8 @@ static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments) {
         if (!startControlSocketServer(&errorMessage)) {
             NSMutableDictionary* backup = loadRouteBackup();
             updateRouteBackupState(backup, ROUTE_BACKUP_STATE_ACTIVE, @"");
-            restoreDefaultRoutingAndPersist(backup);
+            resetTunRuntimeState(backup, ROUTE_BACKUP_STATE_IDLE, @"");
+            releaseTunSessionLock();
             return makeResponse(NO, errorMessage ?: @"Failed to start tun control socket.", nil);
         }
         NSDictionary* syncResponse = syncActiveWhitelistWithEntries(storeEntries(), YES);
@@ -1751,6 +1689,7 @@ static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments) {
             printf("tun session started\n");
         }
         controlSocketAcceptLoop();
+        releaseTunSessionLock();
         return makeResponse(YES, @"Tun session exited.", tunStatusPayload());
     }
     return makeResponse(NO, @"Unknown tun subcommand.", nil);
@@ -1892,6 +1831,7 @@ static void cleanupHandle(int signal_ns) {
     if ([runtimeMode isEqualToString:@"tun"]) {
         stopTunSession();
     }
+    releaseTunSessionLock();
     runLoopMark = NO;
 }
 
@@ -1899,6 +1839,7 @@ int main(int argc, const char * argv[])
 {
     routeHelper = [[SYSRouteHelper alloc] init];
     activeWhitelistRoutes = [[NSMutableDictionary alloc] init];
+    activeIPv4TakeoverRoutes = [[NSMutableArray alloc] init];
     signal(SIGABRT, cleanupHandle);
     signal(SIGINT, cleanupHandle);
 

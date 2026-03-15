@@ -2,6 +2,8 @@
 
 This helper manages system proxy settings and the tun route whitelist used by V2RayXS.
 
+For tun mode, the helper now preserves the system default route and installs IPv4 takeover CIDRs instead of switching the default route to `utun`.
+
 ## Commands
 
 - `v2rayx_sysconf tun start <socksPort>`: starts the tun session and the UNIX socket control server.
@@ -16,11 +18,20 @@ This helper manages system proxy settings and the tun route whitelist used by V2
 
 ## Files
 
-- `system_route_backup.plist`: runtime tun session backup and route recovery state.
+- `system_route_backup.plist`: runtime tun session state, baseline route metadata, and active takeover/bypass routes.
 - `route_whitelist_store.plist`: persisted whitelist configuration.
 - `tun_route.sock`: UNIX socket used for tun session control.
+- `tun_session.lock`: single-session guard for tun start/stop operations.
 
 All files live in `~/Library/Application Support/V2RayXS/` unless `V2RAYXS_APP_SUPPORT_PATH` is set for tests.
+
+## Tun route behavior
+
+- `tun start` preserves the existing IPv4 default route.
+- The helper installs IPv4 takeover CIDRs `0.0.0.0/1` and `128.0.0.0/1` to the active `utun` interface.
+- Persisted route whitelist entries are still applied as host bypass routes via the baseline gateway/interface.
+- `tun stop` removes helper-managed takeover routes and applied bypass routes; it does not reconstruct the system default route because the default route is never removed.
+- `tun status --json` reports active takeover routes in `ipv4TakeoverRoutes`.
 
 ## JSON output
 

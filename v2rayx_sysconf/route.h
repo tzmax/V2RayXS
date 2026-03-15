@@ -82,6 +82,18 @@ typedef NS_ENUM(NSInteger, SYSRouteAddressFamily) {
 
 -(BOOL) deleteHostRouteToDestination:(NSString*) destination interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
 
+-(BOOL) addNetworkRouteToDestination:(NSString*) destinationCIDR gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family;
+
+-(BOOL) deleteNetworkRouteToDestination:(NSString*) destinationCIDR gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family;
+
+-(BOOL) addNetworkRouteToDestination:(NSString*) destinationCIDR interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
+
+-(BOOL) deleteNetworkRouteToDestination:(NSString*) destinationCIDR interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
+
+-(BOOL) hasNetworkRouteToDestination:(NSString*) destinationCIDR gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family;
+
+-(BOOL) hasNetworkRouteToDestination:(NSString*) destinationCIDR interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
+
 @end
 
 #endif /* route_h */

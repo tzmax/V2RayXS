@@ -27,6 +27,8 @@ static NSArray<NSString*>* routeArgumentsForScopedAction(NSString* action, NSStr
 static NSArray<NSString*>* routeArgumentsForInterfaceAction(NSString* action, NSString* target, NSString* interfaceName, SYSRouteAddressFamily family, BOOL isHost);
 static NSArray<NSString*>* routeArgumentsForScopedInterfaceAction(NSString* action, NSString* target, NSString* interfaceName, NSString* scopeInterface, SYSRouteAddressFamily family, BOOL isHost);
 static NSString* normalizedIPAddress(NSString* ipAddress, SYSRouteAddressFamily family);
+static NSString* normalizedCIDRTarget(NSString* destinationCIDR, SYSRouteAddressFamily family, NSInteger* prefixLengthOut);
+static BOOL hasNetworkRouteToDestination(NSString* destinationCIDR, NSString* gateway, NSString* interfaceName, SYSRouteAddressFamily family);
 
 extern char **environ;
 
@@ -459,6 +461,94 @@ extern char **environ;
     return YES;
 }
 
+-(BOOL) addNetworkRouteToDestination:(NSString*) destinationCIDR gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family {
+    if (destinationCIDR == NULL || gateway == NULL || gateway.length == 0 || ![self isValidGateway:gateway]) {
+        return NO;
+    }
+    if (hasNetworkRouteToDestination(destinationCIDR, gateway, nil, family)) {
+        return YES;
+    }
+    NSInteger prefixLength = 0;
+    NSString* normalizedTarget = normalizedCIDRTarget(destinationCIDR, family, &prefixLength);
+    if (normalizedTarget == nil) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForAction(@"add", normalizedTarget, gateway, family, NO));
+    if (!taskSucceeded(taskResult) && !hasNetworkRouteToDestination(destinationCIDR, gateway, nil, family)) {
+        NSLog(@"Failed to add network route %@ via %@ (exit %@): %@", normalizedTarget, gateway, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return YES;
+}
+
+-(BOOL) deleteNetworkRouteToDestination:(NSString*) destinationCIDR gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family {
+    if (destinationCIDR == NULL || gateway == NULL || gateway.length == 0) {
+        return NO;
+    }
+    if (!hasNetworkRouteToDestination(destinationCIDR, gateway, nil, family)) {
+        return YES;
+    }
+    NSInteger prefixLength = 0;
+    NSString* normalizedTarget = normalizedCIDRTarget(destinationCIDR, family, &prefixLength);
+    if (normalizedTarget == nil) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForAction(@"delete", normalizedTarget, gateway, family, NO));
+    if (!taskSucceeded(taskResult) && hasNetworkRouteToDestination(destinationCIDR, gateway, nil, family)) {
+        NSLog(@"Failed to delete network route %@ via %@ (exit %@): %@", normalizedTarget, gateway, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return YES;
+}
+
+-(BOOL) addNetworkRouteToDestination:(NSString*) destinationCIDR interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family {
+    if (destinationCIDR == NULL || interfaceName == NULL || interfaceName.length == 0) {
+        return NO;
+    }
+    if (hasNetworkRouteToDestination(destinationCIDR, nil, interfaceName, family)) {
+        return YES;
+    }
+    NSInteger prefixLength = 0;
+    NSString* normalizedTarget = normalizedCIDRTarget(destinationCIDR, family, &prefixLength);
+    if (normalizedTarget == nil) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForInterfaceAction(@"add", normalizedTarget, interfaceName, family, NO));
+    if (!taskSucceeded(taskResult) && !hasNetworkRouteToDestination(destinationCIDR, nil, interfaceName, family)) {
+        NSLog(@"Failed to add network route %@ via interface %@ (exit %@): %@", normalizedTarget, interfaceName, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return YES;
+}
+
+-(BOOL) deleteNetworkRouteToDestination:(NSString*) destinationCIDR interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family {
+    if (destinationCIDR == NULL || interfaceName == NULL || interfaceName.length == 0) {
+        return NO;
+    }
+    if (!hasNetworkRouteToDestination(destinationCIDR, nil, interfaceName, family)) {
+        return YES;
+    }
+    NSInteger prefixLength = 0;
+    NSString* normalizedTarget = normalizedCIDRTarget(destinationCIDR, family, &prefixLength);
+    if (normalizedTarget == nil) {
+        return NO;
+    }
+    NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForInterfaceAction(@"delete", normalizedTarget, interfaceName, family, NO));
+    if (!taskSucceeded(taskResult) && hasNetworkRouteToDestination(destinationCIDR, nil, interfaceName, family)) {
+        NSLog(@"Failed to delete network route %@ via interface %@ (exit %@): %@", normalizedTarget, interfaceName, taskExitCode(taskResult), taskErrorOutput(taskResult));
+        return NO;
+    }
+    return YES;
+}
+
+-(BOOL) hasNetworkRouteToDestination:(NSString*) destinationCIDR gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family {
+    return hasNetworkRouteToDestination(destinationCIDR, gateway, nil, family);
+}
+
+-(BOOL) hasNetworkRouteToDestination:(NSString*) destinationCIDR interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family {
+    return hasNetworkRouteToDestination(destinationCIDR, nil, interfaceName, family);
+}
+
 @end
 
 static NSArray<NSString*>* routeArgumentsForAction(NSString* action, NSString* target, NSString* gateway, SYSRouteAddressFamily family, BOOL isHost)
@@ -538,6 +628,77 @@ static NSString* normalizedIPAddress(NSString* ipAddress, SYSRouteAddressFamily 
     }
 
     return [NSString stringWithUTF8String:buffer];
+}
+
+static NSString* normalizedCIDRTarget(NSString* destinationCIDR, SYSRouteAddressFamily family, NSInteger* prefixLengthOut)
+{
+    if (destinationCIDR == NULL) {
+        return nil;
+    }
+    NSString* trimmed = [destinationCIDR stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        return nil;
+    }
+    NSArray<NSString*>* parts = [trimmed componentsSeparatedByString:@"/"];
+    if (parts.count != 2) {
+        return nil;
+    }
+    NSScanner* scanner = [NSScanner scannerWithString:parts[1]];
+    NSInteger prefixLength = -1;
+    if (![scanner scanInteger:&prefixLength] || ![scanner isAtEnd]) {
+        return nil;
+    }
+    NSInteger maxPrefix = family == SYSRouteAddressFamilyIPv6 ? 128 : 32;
+    if (prefixLength < 0 || prefixLength > maxPrefix) {
+        return nil;
+    }
+    NSString* normalizedIP = normalizedIPAddress(parts[0], family);
+    if (normalizedIP == nil) {
+        return nil;
+    }
+    if (prefixLengthOut != NULL) {
+        *prefixLengthOut = prefixLength;
+    }
+    return [NSString stringWithFormat:@"%@/%ld", normalizedIP, (long)prefixLength];
+}
+
+static BOOL hasNetworkRouteToDestination(NSString* destinationCIDR, NSString* gateway, NSString* interfaceName, SYSRouteAddressFamily family)
+{
+    NSInteger prefixLength = 0;
+    NSString* normalizedTarget = normalizedCIDRTarget(destinationCIDR, family, &prefixLength);
+    if (normalizedTarget == nil) {
+        return NO;
+    }
+
+    NSMutableArray<NSString*>* arguments = [NSMutableArray arrayWithObject:@"-n"];
+    if (family == SYSRouteAddressFamilyIPv6) {
+        [arguments addObject:@"-inet6"];
+    }
+    [arguments addObjectsFromArray:@[@"get", normalizedTarget]];
+    NSDictionary* taskResult = runTask(@"/sbin/route", arguments);
+    NSString* outStr = [taskOutput(taskResult) stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!taskSucceeded(taskResult) && outStr.length == 0) {
+        return NO;
+    }
+
+    __block NSString* currentGateway = @"";
+    __block NSString* currentInterface = @"";
+    [outStr enumerateLinesUsingBlock:^(NSString * _Nonnull line, BOOL * _Nonnull stop) {
+        NSString* trimmedLine = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmedLine hasPrefix:@"gateway:"]) {
+            currentGateway = [[trimmedLine substringFromIndex:[@"gateway:" length]] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] ?: @"";
+        } else if ([trimmedLine hasPrefix:@"interface:"]) {
+            currentInterface = [[trimmedLine substringFromIndex:[@"interface:" length]] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] ?: @"";
+        }
+    }];
+
+    if (gateway.length > 0) {
+        return [currentGateway isEqualToString:gateway];
+    }
+    if (interfaceName.length > 0) {
+        return [currentInterface isEqualToString:interfaceName];
+    }
+    return currentGateway.length > 0 || currentInterface.length > 0;
 }
 
 static NSArray<NSDictionary*>* parseDefaultRoutesFromNetstatOutput(NSString* output, SYSRouteAddressFamily family)
