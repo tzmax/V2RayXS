@@ -765,28 +765,41 @@ static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
 - (IBAction)checkUpgrade:(id)sender {
     NSURL* url =[NSURL URLWithString:@"https://api.github.com/repos/tzmax/v2rayxs/releases/latest"];
     NSURLSessionDataTask* task = [[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+        __block BOOL shouldShowUpgrade = NO;
         @try {
-            NSDictionary* d = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if ([d[@"prerelease"] isEqualToNumber:@NO]) {
+            if (error == nil && data != nil) {
+                NSDictionary* d = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                NSString* tagName = [d[@"tag_name"] isKindOfClass:[NSString class]] ? d[@"tag_name"] : nil;
+                NSString* currentVersionString = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleShortVersionString"];
+                if ([d[@"prerelease"] isEqualToNumber:@NO] && tagName.length > 1 && currentVersionString.length > 0) {
                 NSNumberFormatter* f = [[NSNumberFormatter alloc] init];
                 f.numberStyle = NSNumberFormatterDecimalStyle;
-                NSArray* newVersion = [[d[@"tag_name"] substringFromIndex:1] componentsSeparatedByString:@"."];
-                NSArray* currentVersion = [[[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleShortVersionString"] componentsSeparatedByString:@"."];
-                for (int i = 0; i < 3; i += 1) {
+                    NSArray* newVersion = [[tagName substringFromIndex:1] componentsSeparatedByString:@"."];
+                    NSArray* currentVersion = [currentVersionString componentsSeparatedByString:@"."];
+                    NSInteger compareCount = MIN((NSInteger)newVersion.count, (NSInteger)currentVersion.count);
+                    for (NSInteger i = 0; i < compareCount; i += 1) {
                     NSInteger newv = [[f numberFromString:newVersion[i]] integerValue];
                     NSInteger currentv = [[f numberFromString:currentVersion[i]] integerValue];
                     if (newv > currentv) {
-                        self.upgradeMenuItem.hidden = false;
-                        return;
+                            shouldShowUpgrade = YES;
+                            break;
+                        }
+                        if (newv < currentv) {
+                            break;
+                        }
                     }
                 }
-
             }
         } @catch (NSException *exception) {
         } @finally {
             ;
         }
-        self.upgradeMenuItem.hidden = true;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            BOOL shouldHideUpgrade = !shouldShowUpgrade;
+            if (self.upgradeMenuItem.hidden != shouldHideUpgrade) {
+                self.upgradeMenuItem.hidden = shouldHideUpgrade;
+            }
+        });
     }];
     [task resume];
 }
