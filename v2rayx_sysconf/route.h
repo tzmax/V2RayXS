@@ -26,6 +26,10 @@ typedef NS_ENUM(NSInteger, SYSRouteAddressFamily) {
 
 -(NSString*) getDefaultRouteGatewayForFamily:(SYSRouteAddressFamily)family;
 
+-(NSString*) getRouteInterface:(NSString*) rule family:(SYSRouteAddressFamily)family;
+
+-(NSString*) getDefaultRouteInterfaceForFamily:(SYSRouteAddressFamily)family;
+
 -(BOOL) isValidGateway:(NSString*) gateway;
 
 -(BOOL) isValidIPAddress:(NSString*) ipAddress family:(SYSRouteAddressFamily*)familyOut;
@@ -46,9 +50,21 @@ typedef NS_ENUM(NSInteger, SYSRouteAddressFamily) {
 
 -(BOOL) deleteDefaultRouteViaGateway:(NSString*) gateway family:(SYSRouteAddressFamily)family;
 
+-(BOOL) deleteDefaultRouteForFamily:(SYSRouteAddressFamily)family;
+
+-(BOOL) hasDefaultRouteViaInterface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
+
+-(BOOL) addDefaultRouteViaInterface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
+
+-(BOOL) deleteDefaultRouteViaInterface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
+
 -(BOOL) addHostRouteToDestination:(NSString*) destination gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family;
 
 -(BOOL) deleteHostRouteToDestination:(NSString*) destination gateway:(NSString*) gateway family:(SYSRouteAddressFamily)family;
+
+-(BOOL) addHostRouteToDestination:(NSString*) destination interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
+
+-(BOOL) deleteHostRouteToDestination:(NSString*) destination interface:(NSString*) interfaceName family:(SYSRouteAddressFamily)family;
 
 @end
 

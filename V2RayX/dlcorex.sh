@@ -1,4 +1,5 @@
-VERSION="1.8.13"
+#!/bin/bash
+VERSION="26.2.6"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BOLD='\033[1m'

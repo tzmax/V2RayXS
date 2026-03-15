@@ -112,6 +112,7 @@
     self.dnsString = _appDelegate.dnsString;
     self.enableRestore = _appDelegate.enableRestore;
     self.enableEncryption = _appDelegate.enableEncryption;
+    self.useXrayTun = _appDelegate.useXrayTun;
     self.encryptionKey = [NSString stringWithString:_appDelegate.encryptionKey];
     NSDictionary *logLevelDic = @{
                                @"debug": @4,
@@ -299,6 +300,7 @@
         [_appDelegate.routingRuleSets addObject:[ROUTING_DIRECT mutableDeepCopy]];
     }
     _appDelegate.enableEncryption = self.enableEncryption;
+    _appDelegate.useXrayTun = self.useXrayTun;
     _appDelegate.encryptionKey = self.encryptionKey;
     [_appDelegate saveConfigInfo];
     [_appDelegate updateSubscriptions:self];
@@ -315,6 +317,7 @@
             self.subscriptions = self.advancedWindowController.subscriptions;
             self.enableRestore = self.advancedWindowController.enableRestore;
             self.enableEncryption = self.advancedWindowController.enableEncryption;
+            self.useXrayTun = self.advancedWindowController.useXrayTun;
             self.encryptionKey = self.advancedWindowController.encryptionKey;
         }
         self.advancedWindowController = nil;

@@ -50,6 +50,7 @@
 @property (nonatomic) NSMutableArray *cusProfiles;
 @property BOOL enableRestore;
 @property BOOL enableEncryption;
+@property BOOL useXrayTun;
 @property NSString* encryptionKey;
 
 @property (weak) IBOutlet NSTextField *versionField;

@@ -101,9 +101,24 @@
     self.enableRestore = configWindowController.enableRestore;
     
     self.enableEncryption = configWindowController.enableEncryption;
+    self.useXrayTun = configWindowController.useXrayTun;
     self.encryptionKey = [[NSString alloc] initWithString:configWindowController.encryptionKey];
     // encryption
     _changeIndicatorField.stringValue = @"";
+    self.currentCoreSupportsXrayTun = [configWindowController.appDelegate currentCoreSupportsXrayTun];
+    [_useXrayTunButton setEnabled:self.currentCoreSupportsXrayTun];
+    if (!self.currentCoreSupportsXrayTun) {
+        self.useXrayTun = NO;
+    }
+    [_useXrayTunButton setState:self.useXrayTun ? NSControlStateValueOn : NSControlStateValueOff];
+    NSString* versionLine = [configWindowController.appDelegate currentCoreVersionString];
+    if (self.currentCoreSupportsXrayTun) {
+        _xrayTunStatusField.stringValue = [NSString stringWithFormat:@"Current core supports Xray TUN inbound.\n%@", versionLine.length > 0 ? versionLine : @"xray-core"];
+    } else if ([configWindowController.appDelegate isCurrentCoreXray]) {
+        _xrayTunStatusField.stringValue = [NSString stringWithFormat:@"Current xray-core version is too old for Xray TUN inbound.\nMinimum required: %@.\nCurrent: %@", @"26.1.23+", versionLine.length > 0 ? versionLine : @"unknown"];
+    } else {
+        _xrayTunStatusField.stringValue = @"Current core does not support Xray TUN inbound.\nPlease switch to xray-core 26.1.23+.";
+    }
     
     [self fillData];
 }

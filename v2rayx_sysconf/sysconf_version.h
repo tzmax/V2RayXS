@@ -7,6 +7,6 @@
 #ifndef sysconf_version_h
 #define sysconf_version_h
 
-#define VERSION @"v2rayx_sysconf 1.5.2"
+#define VERSION @"v2rayx_sysconf 1.5.3"
 
 #endif /* sysconf_version_h */

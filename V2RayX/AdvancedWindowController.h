@@ -79,9 +79,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 // encryption
 @property (weak) IBOutlet NSButton *enableEncryptionButton;
+@property (weak) IBOutlet NSButton *useXrayTunButton;
 @property (weak) IBOutlet NSSecureTextField *encryptionKeyField;
 @property (weak) IBOutlet NSSecureTextField *encryptionKeyConfirmField;
+@property (weak) IBOutlet NSTextField *xrayTunStatusField;
 @property BOOL enableEncryption;
+@property BOOL useXrayTun;
+@property BOOL currentCoreSupportsXrayTun;
 @property NSString* encryptionKey;
 @property (weak) IBOutlet NSTextField *changeIndicatorField;
 

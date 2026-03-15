@@ -26,6 +26,7 @@
                 <outlet property="enableRestoreButton" destination="Brv-Oa-rjx" id="JtK-Jh-zAk"/>
                 <outlet property="encryptionKeyConfirmField" destination="sHt-j7-mwK" id="IPv-yO-hIY"/>
                 <outlet property="encryptionKeyField" destination="MqC-Po-7Ay" id="ckz-rO-PXI"/>
+                <outlet property="useXrayTunButton" destination="K3A-vx-JK8" id="P7A-Rf-zQ2"/>
                 <outlet property="inboundEnableButton" destination="RGU-Jf-XVA" id="4Fq-0M-iMT"/>
                 <outlet property="inboundTagBox" destination="3aY-he-a4p" id="iCo-WJ-W8p"/>
                 <outlet property="ipEnableButton" destination="8i6-Ji-on9" id="YSe-e8-vEe"/>
@@ -54,6 +55,7 @@
                 <outlet property="subscriptionAddControl" destination="3fe-R5-yne" id="iaE-97-e45"/>
                 <outlet property="subscriptionTable" destination="WsS-Gf-yrN" id="UxJ-Ro-NDe"/>
                 <outlet property="window" destination="QvC-M9-y7g" id="1sc-H8-xnH"/>
+                <outlet property="xrayTunStatusField" destination="Mve-uV-pFq" id="9JY-Ur-e9M"/>
             </connections>
         </customObject>
         <customObject id="-1" userLabel="First Responder" customClass="FirstResponder"/>
@@ -75,7 +77,7 @@
                             <font key="font" metaFont="system"/>
                             <string key="keyEquivalent" base64-UTF8="YES">
 Gw
-</string>
+                            </string>
                         </buttonCell>
                         <connections>
                             <action selector="ok:" target="-2" id="aNh-JL-vgi"/>
@@ -864,7 +866,7 @@ Compatibility is not guaranteed.</string>
                                     </subviews>
                                 </view>
                             </tabViewItem>
-                            <tabViewItem label="Encryption" identifier="" id="EcZ-9w-1Yw">
+                            <tabViewItem label="Preference" identifier="" id="EcZ-9w-1Yw">
                                 <view key="view" id="1w0-hb-2Ct">
                                     <rect key="frame" x="10" y="33" width="494" height="360"/>
                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
@@ -891,7 +893,7 @@ Compatibility is not guaranteed.</string>
                                             </textFieldCell>
                                         </textField>
                                         <textField horizontalHuggingPriority="251" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="Nek-2F-WfS">
-                                            <rect key="frame" x="31" y="17" width="376" height="17"/>
+                                            <rect key="frame" x="31" y="232" width="376" height="17"/>
                                             <autoresizingMask key="autoresizingMask"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="WARNING: this function is still in beta. Backup before you try!" id="0s7-uP-t1h">
                                                 <font key="font" metaFont="system"/>
@@ -959,6 +961,27 @@ Compatibility is not guaranteed.</string>
                                                 <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
                                             </textFieldCell>
                                         </textField>
+                                        <button verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="K3A-vx-JK8">
+                                            <rect key="frame" x="31" y="53" width="182" height="18"/>
+                                            <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
+                                            <buttonCell key="cell" type="check" title="Use Xray TUN inbound" bezelStyle="regularSquare" imagePosition="left" inset="2" id="vQ9-o8-euv">
+                                                <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                                <font key="font" metaFont="system"/>
+                                            </buttonCell>
+                                            <connections>
+                                                <binding destination="-2" name="enabled" keyPath="self.currentCoreSupportsXrayTun" id="c2L-fP-0mF"/>
+                                                <binding destination="-2" name="value" keyPath="self.useXrayTun" id="BJo-wR-0eW"/>
+                                            </connections>
+                                        </button>
+                                        <textField verticalHuggingPriority="750" horizontalCompressionResistancePriority="250" fixedFrame="YES" preferredMaxLayoutWidth="432" translatesAutoresizingMaskIntoConstraints="NO" id="Mve-uV-pFq">
+                                            <rect key="frame" x="31" y="2" width="432" height="48"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <textFieldCell key="cell" selectable="YES" lineBreakMode="wordWrapping" usesSingleLineMode="NO" title="Current core status" id="90x-GX-oQw">
+                                                <font key="font" metaFont="system"/>
+                                                <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
+                                                <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
+                                            </textFieldCell>
+                                        </textField>
                                     </subviews>
                                 </view>
                             </tabViewItem>
@@ -972,7 +995,7 @@ Compatibility is not guaranteed.</string>
                             <font key="font" metaFont="system"/>
                             <string key="keyEquivalent" base64-UTF8="YES">
 Gw
-</string>
+                            </string>
                         </buttonCell>
                         <connections>
                             <action selector="cancel:" target="-2" id="cVE-EY-gVw"/>
@@ -1113,7 +1136,7 @@ will match all private IPs.</string>
                         <font key="font" metaFont="system"/>
                         <string key="keyEquivalent" base64-UTF8="YES">
 Gw
-</string>
+                        </string>
                     </buttonCell>
                     <connections>
                         <action selector="closeDomainOrIPList:" target="-2" id="aBw-X3-Ynf"/>
@@ -1181,7 +1204,7 @@ Gw
                         <font key="font" metaFont="system"/>
                         <string key="keyEquivalent" base64-UTF8="YES">
 Gw
-</string>
+                        </string>
                     </buttonCell>
                     <connections>
                         <action selector="closeDomainOrIPList:" target="-2" id="jxT-I8-dLz"/>

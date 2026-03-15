@@ -15,6 +15,7 @@
 #import "ConfigImporter.h"
 #import "NSData+AES256Encryption.h"
 #import <sys/stat.h>
+#import <netdb.h>
 
 #define kUseAllServer -10
 
@@ -45,6 +46,8 @@
 @implementation AppDelegate
 
 static AppDelegate *appDelegate;
+static BOOL helperTunSessionActive = NO;
+static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
 
 - (NSData*)v2rayJSONconfig {
     return v2rayJSONconfig;
@@ -251,6 +254,7 @@ static AppDelegate *appDelegate;
 
 - (void)continueInitialization {
     [_statusBarItem setMenu:_statusBarMenu];
+    [self probeTunRoutingSessionState];
     // start proxy
     [self updateSubscriptions:self]; // also includes [self didChangeStatus:self];
 }
@@ -472,8 +476,32 @@ static AppDelegate *appDelegate;
     });
 }
 
+- (NSString*)helperCommandFailureDetailsFromResult:(NSDictionary*)taskResult {
+    NSString* stderrString = [taskResult[@"stderr"] isKindOfClass:[NSString class]] ? taskResult[@"stderr"] : @"";
+    NSString* trimmedStderr = [stderrString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmedStderr.length > 0) {
+        return trimmedStderr;
+    }
+
+    NSString* stdoutString = [taskResult[@"stdout"] isKindOfClass:[NSString class]] ? taskResult[@"stdout"] : @"";
+    NSData* stdoutData = [stdoutString dataUsingEncoding:NSUTF8StringEncoding];
+    if (stdoutData != nil) {
+        NSDictionary* jsonObject = [NSJSONSerialization JSONObjectWithData:stdoutData options:0 error:nil];
+        NSString* jsonMessage = [jsonObject isKindOfClass:[NSDictionary class]] ? jsonObject[@"message"] : nil;
+        if ([jsonMessage isKindOfClass:[NSString class]]) {
+            NSString* trimmedMessage = [jsonMessage stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (trimmedMessage.length > 0) {
+                return trimmedMessage;
+            }
+        }
+    }
+
+    return @"";
+}
+
 - (BOOL)runHelperCommand:(NSArray*)arguments action:(NSString*)action {
-    int exitCode = runCommandLine(kV2RayXHelper, arguments);
+    NSDictionary* taskResult = runCommandLineResult(kV2RayXHelper, arguments);
+    int exitCode = [taskResult[@"exitCode"] intValue];
     if (exitCode == 0) {
         return YES;
     }
@@ -486,8 +514,12 @@ static AppDelegate *appDelegate;
     }
 
     NSString* helperError = nil;
+    NSString* commandError = [self helperCommandFailureDetailsFromResult:taskResult];
     [self helperBinaryIsHealthy:&helperError];
     NSString* errorMessage = [NSString stringWithFormat:@"Helper command `%@` failed with exit code %d.", [arguments componentsJoinedByString:@" "], exitCode];
+    if (commandError.length > 0) {
+        errorMessage = [errorMessage stringByAppendingFormat:@"\n\nError: %@", commandError];
+    }
     if (helperError.length > 0) {
         errorMessage = [errorMessage stringByAppendingFormat:@"\n\nDetected helper issue: %@\nPlease reinstall the helper.", helperError];
     }
@@ -512,6 +544,33 @@ static AppDelegate *appDelegate;
             NSString* address = serverItem[@"address"] ?: serverItem[@"server"];
             if ([address isKindOfClass:[NSString class]] && address.length > 0 && ![serverAddresses containsObject:address]) {
                 [serverAddresses addObject:address];
+            }
+        }
+    }
+}
+
+- (void)collectServerAddressesFromConfigObject:(id)jsonObject into:(NSMutableArray<NSString*>*)serverAddresses {
+    if (![jsonObject isKindOfClass:[NSDictionary class]]) {
+        return;
+    }
+    NSDictionary* configObject = (NSDictionary*)jsonObject;
+    NSDictionary* outbound = configObject[@"outbound"];
+    if ([outbound isKindOfClass:[NSDictionary class]]) {
+        [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
+    }
+    NSArray* outbounds = configObject[@"outbounds"];
+    if ([outbounds isKindOfClass:[NSArray class]]) {
+        for (NSDictionary* candidate in outbounds) {
+            if ([candidate isKindOfClass:[NSDictionary class]]) {
+                [self collectServerAddressesFromOutbound:candidate into:serverAddresses];
+            }
+        }
+    }
+    NSArray* outboundDetour = configObject[@"outboundDetour"];
+    if ([outboundDetour isKindOfClass:[NSArray class]]) {
+        for (NSDictionary* candidate in outboundDetour) {
+            if ([candidate isKindOfClass:[NSDictionary class]]) {
+                [self collectServerAddressesFromOutbound:candidate into:serverAddresses];
             }
         }
     }
@@ -556,32 +615,143 @@ static AppDelegate *appDelegate;
 - (NSArray<NSString*>*)tunWhitelistIPAddresses {
     NSMutableArray<NSString*>* serverAddresses = [[NSMutableArray alloc] init];
     if (!useCusProfile) {
-        NSInteger outboundCount = profiles.count + _subsOutbounds.count;
-        if (!useMultipleServer && selectedServerIndex >= 0 && selectedServerIndex < outboundCount) {
-            NSDictionary* selectedOutbound = selectedServerIndex < profiles.count ? profiles[selectedServerIndex] : _subsOutbounds[selectedServerIndex - profiles.count];
-            [self collectServerAddressesFromOutbound:selectedOutbound into:serverAddresses];
-        }
-        for (NSDictionary* outbound in profiles) {
-            [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
-        }
-        for (NSDictionary* outbound in _subsOutbounds) {
-            [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
+        NSDictionary* fullConfig = [self generateConfigFile];
+        NSArray* generatedOutbounds = fullConfig[@"outbounds"];
+        if ([generatedOutbounds isKindOfClass:[NSArray class]]) {
+            for (NSDictionary* outbound in generatedOutbounds) {
+                if ([outbound isKindOfClass:[NSDictionary class]]) {
+                    [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
+                }
+            }
         }
     } else if (selectedCusServerIndex >= 0 && selectedCusServerIndex < cusProfiles.count) {
         NSData* customProfileData = [NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]];
         NSDictionary* customJSON = customProfileData != nil ? [NSJSONSerialization JSONObjectWithData:customProfileData options:0 error:nil] : nil;
-        NSArray* customOutbounds = customJSON[@"outbounds"];
-        if ([customOutbounds isKindOfClass:[NSArray class]]) {
-            for (NSDictionary* outbound in customOutbounds) {
-                [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
-            }
-        }
-        NSDictionary* outbound = customJSON[@"outbound"];
-        if ([outbound isKindOfClass:[NSDictionary class]]) {
-            [self collectServerAddressesFromOutbound:outbound into:serverAddresses];
-        }
+        [self collectServerAddressesFromConfigObject:customJSON into:serverAddresses];
     }
     return [self resolvedIPAddressesFromHosts:serverAddresses];
+}
+
+- (void)syncTunWhitelistRoutes {
+    if (self.proxyMode != tunMode || !self.proxyState) {
+        return;
+    }
+    NSArray<NSString*>* tunWhitelistIPs = [self tunWhitelistIPAddresses];
+    if (tunWhitelistIPs.count > 0) {
+        NSMutableArray* syncArguments = [NSMutableArray arrayWithObject:@"route"];
+        [syncArguments addObject:@"sync-file"];
+        NSString* tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"v2rayxs_tun_whitelist.json"];
+        NSData* whitelistData = [NSJSONSerialization dataWithJSONObject:tunWhitelistIPs options:0 error:nil];
+        if (whitelistData != nil) {
+            [whitelistData writeToFile:tempPath atomically:YES];
+            [syncArguments addObject:tempPath];
+            [self runHelperCommand:syncArguments action:@"sync tun whitelist routes"];
+        }
+    } else {
+        [self runHelperCommand:@[@"route", @"clear"] action:@"clear tun whitelist routes"];
+    }
+}
+
+- (BOOL)shouldMaintainTunRoutingSession {
+    return self.proxyState && self.proxyMode == tunMode;
+}
+
+- (BOOL)hasActiveTunRoutingSession {
+    return helperTunSessionActive;
+}
+
+- (void)probeTunRoutingSessionState {
+    NSTask *task = [[NSTask alloc] init];
+    [task setLaunchPath:kV2RayXHelper];
+    [task setArguments:@[@"tun", @"status", @"--json"]];
+    NSPipe *stdoutpipe = [NSPipe pipe];
+    NSPipe *stderrpipe = [NSPipe pipe];
+    [task setStandardOutput:stdoutpipe];
+    [task setStandardError:stderrpipe];
+    @try {
+        [task launch];
+    } @catch (NSException *exception) {
+        helperTunSessionActive = NO;
+        return;
+    }
+    NSData *data = [[stdoutpipe fileHandleForReading] readDataToEndOfFile];
+    NSData *errorData = [[stderrpipe fileHandleForReading] readDataToEndOfFile];
+    [task waitUntilExit];
+    if (errorData.length > 0) {
+        NSString *stderrString = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
+        if (stderrString.length > 0) {
+            NSLog(@"%@", stderrString);
+        }
+    }
+    if (task.terminationStatus != 0 || data.length == 0) {
+        helperTunSessionActive = NO;
+        return;
+    }
+    NSDictionary *statusResponse = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    NSDictionary *payload = [statusResponse isKindOfClass:[NSDictionary class]] ? statusResponse[@"payload"] : nil;
+    NSString *sessionState = [payload isKindOfClass:[NSDictionary class]] ? payload[@"session"] : nil;
+    helperTunSessionActive = [sessionState isKindOfClass:[NSString class]] && ![sessionState isEqualToString:@"inactive"];
+}
+
+- (void)stopTunRoutingSession {
+    if (![self hasActiveTunRoutingSession]) {
+        return;
+    }
+    helperTunSessionActive = NO;
+    dispatch_async(taskQueue, ^{
+        closeHelperApplicationTask();
+    });
+}
+
+- (void)refreshTunRoutingSession {
+    if (![self shouldMaintainTunRoutingSession]) {
+        [self stopTunRoutingSession];
+        return;
+    }
+    helperTunSessionActive = YES;
+    [self updateSystemProxy];
+}
+
+- (NSString*)availableUtunName {
+    NSSet<NSString*>* existing = [NSSet setWithArray:[self existingUtunInterfaces]];
+    for (NSInteger index = 10; index < 256; index++) {
+        NSString* candidate = [NSString stringWithFormat:@"utun%ld", (long)index];
+        if (![existing containsObject:candidate]) {
+            return candidate;
+        }
+    }
+    return @"utun233";
+}
+
+- (NSArray<NSString*>*)existingUtunInterfaces {
+    NSTask* task = [[NSTask alloc] init];
+    if (@available(macOS 10.13, *)) {
+        [task setExecutableURL:[NSURL fileURLWithPath:@"/sbin/ifconfig"]];
+    } else {
+        [task setLaunchPath:@"/sbin/ifconfig"];
+    }
+    NSPipe* stdoutPipe = [NSPipe pipe];
+    [task setStandardOutput:stdoutPipe];
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (NSException *exception) {
+        return @[];
+    }
+    NSData* data = [[stdoutPipe fileHandleForReading] readDataToEndOfFile];
+    NSString* output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+    NSMutableArray<NSString*>* interfaces = [[NSMutableArray alloc] init];
+    [output enumerateLinesUsingBlock:^(NSString * _Nonnull line, BOOL * _Nonnull stop) {
+        NSRange colonRange = [line rangeOfString:@":"];
+        if (colonRange.location == NSNotFound) {
+            return;
+        }
+        NSString* name = [line substringToIndex:colonRange.location];
+        if ([name hasPrefix:@"utun"]) {
+            [interfaces addObject:name];
+        }
+    }];
+    return interfaces;
 }
 
 - (BOOL)isSysconfVersionOK {
@@ -638,6 +808,7 @@ static AppDelegate *appDelegate;
     self.selectedPacFileName = nilCoalescing(appStatus[@"selectedPacFileName"], @"pac.js");
     
     _enableEncryption = [nilCoalescing([defaults objectForKey:@"enableEncryption"], @(NO)) boolValue];
+    _useXrayTun = [nilCoalescing([defaults objectForKey:@"useXrayTun"], @(NO)) boolValue];
     logLevel = nilCoalescing([defaults objectForKey:@"logLevel"], @"none");
     localPort = [nilCoalescing([defaults objectForKey:@"localPort"], @1081) integerValue]; //use 1081 as default local port
     httpPort = [nilCoalescing([defaults objectForKey:@"httpPort"], @8001) integerValue]; //use 8001 as default local http port
@@ -702,6 +873,7 @@ static AppDelegate *appDelegate;
               @"selectedPacFileName": @"pac.js"
               },
       @"enableEncryption":@(NO),
+      @"useXrayTun":@(NO),
       @"logLevel": @"none",
       @"localPort": [NSNumber numberWithInteger:1081],
       @"httpPort": [NSNumber numberWithInteger:8001],
@@ -759,6 +931,7 @@ static AppDelegate *appDelegate;
         NSDictionary *settings =
         @{
           @"enableEncryption":@(self->_enableEncryption),
+          @"useXrayTun":@(self->_useXrayTun),
           @"setingVersion": [NSNumber numberWithInteger:kV2RayXSettingVersion],
           @"logLevel": self.logLevel,
           @"localPort": @(self.localPort),
@@ -781,11 +954,7 @@ static AppDelegate *appDelegate;
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
     // close the tun device helper
-    if (proxyMode == tunMode) {
-        dispatch_async(taskQueue, ^{
-            closeHelperApplicationTask();
-        });
-    }
+    [self stopTunRoutingSession];
     //stop monitor pac
     if (dispatchPacSource) {
         dispatch_source_cancel(dispatchPacSource);
@@ -837,7 +1006,9 @@ static AppDelegate *appDelegate;
 }
 
 - (IBAction)didChangeStatus:(id)sender {
+    [self probeTunRoutingSessionState];
     NSInteger previousStatus = proxyState;
+    BOOL wasMaintainingTunRoutingSession = [self shouldMaintainTunRoutingSession];
     if (sender == self) {
         previousStatus = false;
     }
@@ -871,20 +1042,26 @@ static AppDelegate *appDelegate;
             _enableRestore ? [self restoreSystemProxy] : [self cancelSystemProxy];
         }
     }
+    BOOL shouldMaintainTunRoutingSession = [self shouldMaintainTunRoutingSession];
+    if (proxyState == true && proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun]) {
+        [[NSUserDefaults standardUserDefaults] setObject:[self availableUtunName] forKey:@"xrayTunInterfaceName"];
+    }
     [self coreConfigDidChange:self];
-    if (proxyState == true) {
-        [self updateSystemProxy];
-    } else {
-        dispatch_async(taskQueue, ^{
-            closeHelperApplicationTask();
-        });
+    if (proxyState == false) {
+        [self stopTunRoutingSession];
         [self unloadV2ray];
+    } else if (proxyMode != tunMode) {
+        [self updateSystemProxy];
+    } else if (!wasMaintainingTunRoutingSession && shouldMaintainTunRoutingSession) {
+        [self refreshTunRoutingSession];
     }
     [self updateMenus];
     [self updatePacMenuList];
 }
 
 - (IBAction)didChangeMode:(id)sender {
+    [self probeTunRoutingSessionState];
+    ProxyMode previousMode = proxyMode;
     if (proxyState == true && proxyMode == manualMode && [sender tag] != manualMode) {
         [self backupSystemProxy];
     }
@@ -892,19 +1069,26 @@ static AppDelegate *appDelegate;
         _enableRestore ? [self restoreSystemProxy] : [self cancelSystemProxy];
     }
     
-    if (proxyMode == tunMode) {
-        dispatch_async(taskQueue, ^{
-            closeHelperApplicationTask();
-        });
+    if (proxyMode == tunMode && [sender tag] != tunMode) {
+        [self stopTunRoutingSession];
     }
 
     proxyMode = [sender tag];
+    if (proxyState == true && proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun]) {
+        [[NSUserDefaults standardUserDefaults] setObject:[self availableUtunName] forKey:@"xrayTunInterfaceName"];
+    }
     [self updateMenus];
     if (sender == _pacModeItem) {
         [self updatePacMenuList];
     }
     if (proxyState == true) {
-        [self updateSystemProxy];
+        if (proxyMode == tunMode) {
+            [self refreshTunRoutingSession];
+        } else {
+            [self updateSystemProxy];
+        }
+    } else if (previousMode == tunMode) {
+        [self stopTunRoutingSession];
     }
 }
 
@@ -981,9 +1165,11 @@ static AppDelegate *appDelegate;
 
 -(void)updateSystemProxy {
     NSArray *arguments;
-    dispatch_async(taskQueue, ^{
-        closeHelperApplicationTask();
-    });
+    BOOL shouldUseXrayTun = proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun];
+    BOOL shouldRestartTunRoutingSession = [self shouldMaintainTunRoutingSession];
+    if (shouldRestartTunRoutingSession) {
+        [self stopTunRoutingSession];
+    }
     
     if (proxyState) {
         if (proxyMode == manualMode) { // manualMode mode
@@ -1021,7 +1207,16 @@ static AppDelegate *appDelegate;
             
             // tun mode
             if(proxyMode == tunMode) {
-                arguments = @[@"tun", @"start", [NSString stringWithFormat:@"%ld", localPort]];
+                if (shouldUseXrayTun) {
+                    NSString* tunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
+                    if (![tunName isKindOfClass:[NSString class]] || tunName.length == 0) {
+                        tunName = [self availableUtunName];
+                        [[NSUserDefaults standardUserDefaults] setObject:tunName forKey:@"xrayTunInterfaceName"];
+                    }
+                    arguments = @[@"tun", @"start", @"--attach", tunName];
+                } else {
+                    arguments = @[@"tun", @"start", [NSString stringWithFormat:@"%ld", localPort]];
+                }
             }
             
         }
@@ -1033,19 +1228,16 @@ static AppDelegate *appDelegate;
                 [self runHelperCommand:@[@"off"] action:action];
             }
             if (self.proxyMode == tunMode) {
-                NSArray<NSString*>* tunWhitelistIPs = [self tunWhitelistIPAddresses];
-                if (tunWhitelistIPs.count > 0) {
-                    NSMutableArray* syncArguments = [NSMutableArray arrayWithObject:@"route"];
-                    [syncArguments addObject:@"sync-file"];
-                    NSString* tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"v2rayxs_tun_whitelist.json"];
-                    NSData* whitelistData = [NSJSONSerialization dataWithJSONObject:tunWhitelistIPs options:0 error:nil];
-                    if (whitelistData != nil) {
-                        [whitelistData writeToFile:tempPath atomically:YES];
-                        [syncArguments addObject:tempPath];
-                        [self runHelperCommand:syncArguments action:@"sync tun whitelist store before enabling tun mode"];
+                [self syncTunWhitelistRoutes];
+            }
+            if (self.proxyMode == tunMode && shouldUseXrayTun) {
+                NSString* targetTun = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
+                for (NSInteger retry = 0; retry < 30; retry++) {
+                    [NSThread sleepForTimeInterval:0.2];
+                    NSArray<NSString*>* currentUtuns = [self existingUtunInterfaces];
+                    if (targetTun.length > 0 && [currentUtuns containsObject:targetTun]) {
+                        break;
                     }
-                } else {
-                    [self runHelperCommand:@[@"route", @"clear"] action:@"clear tun whitelist store before enabling tun mode"];
                 }
             }
             [self runHelperCommand:arguments action:@"apply helper network settings"];
@@ -1161,6 +1353,8 @@ static AppDelegate *appDelegate;
 
 
 - (IBAction)coreConfigDidChange:(id)sender {
+    [self probeTunRoutingSessionState];
+    BOOL shouldRefreshTunSession = [self shouldMaintainTunRoutingSession];
     if (proxyState == true) {
         if (!useMultipleServer && useCusProfile) {
             v2rayJSONconfig = [NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]];
@@ -1170,6 +1364,9 @@ static AppDelegate *appDelegate;
         }
         //[self generateLaunchdPlist:plistPath];
         [self toggleCore];
+        if (shouldRefreshTunSession) {
+            [self refreshTunRoutingSession];
+        }
     }
     [self updateServerMenuList];
     [self updateRuleSetMenuList];
@@ -1258,6 +1455,26 @@ static AppDelegate *appDelegate;
     fullConfig[@"inbounds"][0][@"settings"][@"udp"] = [NSNumber numberWithBool:udpSupport];
     fullConfig[@"inbounds"][1][@"port"] = @(httpPort);
     fullConfig[@"inbounds"][1][@"listen"] = shareOverLan ? @"0.0.0.0" : @"127.0.0.1";
+    BOOL shouldAppendTunInbound = proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun];
+    if (shouldAppendTunInbound) {
+        NSMutableArray* inbounds = [fullConfig[@"inbounds"] mutableCopy];
+        if (inbounds == nil) {
+            inbounds = [[NSMutableArray alloc] init];
+        }
+        NSString* tunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
+        if (![tunName isKindOfClass:[NSString class]] || tunName.length == 0) {
+            tunName = @"utun233";
+        }
+        [inbounds addObject:[@{
+            @"port": @0,
+            @"protocol": @"tun",
+            @"settings": @{
+                @"name": tunName,
+                @"MTU": @1500
+            }
+        } mutableCopy]];
+        fullConfig[@"inbounds"] = inbounds;
+    }
     
     NSArray* dnsArray = [dnsString componentsSeparatedByString:@","];
     if ([dnsArray count] > 0) {
@@ -1359,6 +1576,61 @@ static AppDelegate *appDelegate;
     
 }
 
+- (BOOL)isCurrentCoreXray {
+    NSString* firstLine = [self currentCoreVersionString];
+    if (firstLine.length == 0) {
+        return NO;
+    }
+    return [firstLine rangeOfString:@"xray" options:NSCaseInsensitiveSearch].location != NSNotFound;
+}
+
+- (NSString*)currentCoreVersionString {
+    NSString* v2rayPath = [self getV2rayPath];
+    if (v2rayPath.length == 0) {
+        return @"";
+    }
+    NSTask *task = [[NSTask alloc] init];
+    if (@available(macOS 10.13, *)) {
+        [task setExecutableURL:[NSURL fileURLWithPath:v2rayPath]];
+    } else {
+        [task setLaunchPath:v2rayPath];
+    }
+    [task setArguments:@[@"-version"]];
+    NSPipe *stdoutpipe = [NSPipe pipe];
+    [task setStandardOutput:stdoutpipe];
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (NSException *exception) {
+        return @"";
+    }
+    NSData *data = [[stdoutpipe fileHandleForReading] readDataToEndOfFile];
+    NSString *string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (string.length == 0) {
+        return @"";
+    }
+    return [string componentsSeparatedByString:@"\n"].firstObject ?: @"";
+}
+
+- (BOOL)currentCoreSupportsXrayTun {
+    if (![self isCurrentCoreXray]) {
+        return NO;
+    }
+
+    NSString* versionLine = [self currentCoreVersionString];
+    if (versionLine.length == 0) {
+        return NO;
+    }
+    NSRegularExpression* versionRegex = [NSRegularExpression regularExpressionWithPattern:@"([0-9]+(?:\\.[0-9]+)+)" options:0 error:nil];
+    NSTextCheckingResult* match = [versionRegex firstMatchInString:versionLine options:0 range:NSMakeRange(0, versionLine.length)];
+    if (match == nil || match.numberOfRanges < 2) {
+        return NO;
+    }
+
+    NSString* detectedVersion = [versionLine substringWithRange:[match rangeAtIndex:1]];
+    return [detectedVersion compare:kMinimumSupportedXrayTunVersion options:NSNumericSearch] != NSOrderedAscending;
+}
+
 - (IBAction)authorizeV2sys:(id)sender {
     [self installHelper:true];
 }
@@ -1405,11 +1677,13 @@ void closeHelperApplicationTask(void) {
             [helperApplicationTask terminate];
         }
         helperApplicationTask = NULL;
+        helperTunSessionActive = NO;
         return;
     }
+    helperTunSessionActive = NO;
 }
 
-int runCommandLine(NSString* launchPath, NSArray* arguments) {
+NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments) {
     NSTask *task = [[NSTask alloc] init];
     
     // take notes helperApplicationTask
@@ -1429,23 +1703,38 @@ int runCommandLine(NSString* launchPath, NSArray* arguments) {
     NSPipe *stderrpipe = [NSPipe pipe];
     [task setStandardError:stderrpipe];
     NSFileHandle *file;
+    NSString *stdoutString = @"";
+    NSString *stderrString = @"";
     file = [stdoutpipe fileHandleForReading];
     [task launch];
     NSData *data;
     data = [file readDataToEndOfFile];
     NSString *string;
     string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    stdoutString = string ?: @"";
     if (string.length > 0) {
         NSLog(@"%@", string);
     }
     file = [stderrpipe fileHandleForReading];
     data = [file readDataToEndOfFile];
     string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    stderrString = string ?: @"";
     if (string.length > 0) {
         NSLog(@"%@", string);
     }
     [task waitUntilExit];
-    return task.terminationStatus;
+    if (startsTunSession) {
+        helperTunSessionActive = (task.terminationStatus == 0 || task.terminationStatus == SIGTERM || task.terminationStatus == SIGINT);
+    }
+    return @{
+        @"exitCode": @(task.terminationStatus),
+        @"stdout": stdoutString,
+        @"stderr": stderrString,
+    };
+}
+
+int runCommandLine(NSString* launchPath, NSArray* arguments) {
+    return [runCommandLineResult(launchPath, arguments)[@"exitCode"] intValue];
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context {

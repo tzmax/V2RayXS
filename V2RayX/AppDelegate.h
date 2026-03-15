@@ -22,6 +22,7 @@ typedef enum ProxyMode : NSInteger{
 } ProxyMode;
 
 
+NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments);
 int runCommandLine(NSString* launchPath, NSArray* arguments);
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSUserNotificationCenterDelegate> {
@@ -68,6 +69,7 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 @property BOOL enableRestore;
 @property NSMutableArray *subscriptions;
 @property BOOL enableEncryption;
+@property BOOL useXrayTun;
 @property NSString* encryptionKey;
 
 - (BOOL)helperBinaryIsHealthy:(NSString**)errorMessage;
@@ -89,6 +91,16 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 - (void)saveConfigInfo;
 
 -(NSString*)getV2rayPath;
+- (BOOL)isCurrentCoreXray;
+- (NSString*)currentCoreVersionString;
+- (BOOL)currentCoreSupportsXrayTun;
+- (NSString*)availableUtunName;
+- (BOOL)shouldMaintainTunRoutingSession;
+- (BOOL)hasActiveTunRoutingSession;
+- (void)probeTunRoutingSessionState;
+- (void)stopTunRoutingSession;
+- (void)refreshTunRoutingSession;
+- (void)syncTunWhitelistRoutes;
 - (NSString*)logDirPath;
 
 @property (weak) IBOutlet NSMenuItem *updateServerItem;
