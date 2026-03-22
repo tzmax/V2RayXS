@@ -81,7 +81,6 @@ static NSDictionary* allocateTunFDSession(NSString* tunName, int sendSocketFD);
 static NSDictionary* deactivateExternalTunSession(NSString* expectedTunName);
 static NSDictionary* processServerRequest(NSDictionary* request);
 static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state, NSString* lastError);
-static void hydrateBaselineRuntimeFromBackup(NSMutableDictionary* backup);
 static void updateRouteBackupRoutes(NSMutableDictionary* backup);
 static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments);
 static NSDictionary* handleRouteCommand(NSArray<NSString*>* arguments);
@@ -251,10 +250,10 @@ static NSDictionary* tunStatusPayload(void) {
         @"tunName": tunName,
         @"tunExists": @(tunExists),
         @"tunUp": @(tunUp),
-        @"defaultGatewayV4": defaultRouteGatewayV4.length > 0 ? defaultRouteGatewayV4 : (backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] ?: @""),
-        @"defaultGatewayV6": defaultRouteGatewayV6.length > 0 ? defaultRouteGatewayV6 : (backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] ?: @""),
-        @"defaultInterfaceV4": defaultRouteInterfaceV4.length > 0 ? defaultRouteInterfaceV4 : (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] ?: @""),
-        @"defaultInterfaceV6": defaultRouteInterfaceV6.length > 0 ? defaultRouteInterfaceV6 : (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] ?: @""),
+        @"defaultGatewayV4": defaultRouteGatewayV4 ?: @"",
+        @"defaultGatewayV6": defaultRouteGatewayV6 ?: @"",
+        @"defaultInterfaceV4": defaultRouteInterfaceV4 ?: @"",
+        @"defaultInterfaceV6": defaultRouteInterfaceV6 ?: @"",
         @"ipv4TakeoverRoutes": activeTakeoverEntries ?: @[],
         @"whitelistPersistedCount": @([persistedEntries count]),
         @"whitelistAppliedCount": @(appliedCount),
@@ -284,13 +283,8 @@ static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state,
     if (backup == nil) {
         return;
     }
-    hydrateBaselineRuntimeFromBackup(backup);
     backup[ROUTE_BACKUP_STATE_KEY] = state ?: ROUTE_BACKUP_STATE_IDLE;
     backup[ROUTE_BACKUP_TUN_NAME_KEY] = activeTunName ?: @"";
-    backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] = defaultRouteGatewayV4 ?: @"";
-    backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] = defaultRouteGatewayV6 ?: @"";
-    backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] = defaultRouteInterfaceV4 ?: @"";
-    backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] = defaultRouteInterfaceV6 ?: @"";
     backup[ROUTE_BACKUP_LAST_ERROR_KEY] = lastError ?: @"";
     if (activeTunName.length == 0) {
         backup[ROUTE_BACKUP_SESSION_TYPE_KEY] = SESSION_TYPE_NONE;
@@ -300,29 +294,6 @@ static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state,
     updateRouteBackupRoutes(backup);
     updateRouteBackupTakeoverRoutes(backup, activeIPv4TakeoverRoutes);
     saveRouteBackup(backup);
-}
-
-static void hydrateBaselineRuntimeFromBackup(NSMutableDictionary* backup) {
-    if (backup == nil) {
-        return;
-    }
-    NSString* storedGatewayV4 = [backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] : @"";
-    NSString* storedInterfaceV4 = [backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] : @"";
-    NSString* storedGatewayV6 = [backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] : @"";
-    NSString* storedInterfaceV6 = [backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] : @"";
-
-    if (defaultRouteGatewayV4.length == 0 && storedGatewayV4.length > 0) {
-        defaultRouteGatewayV4 = storedGatewayV4;
-    }
-    if (defaultRouteInterfaceV4.length == 0 && storedInterfaceV4.length > 0) {
-        defaultRouteInterfaceV4 = storedInterfaceV4;
-    }
-    if (defaultRouteGatewayV6.length == 0 && storedGatewayV6.length > 0) {
-        defaultRouteGatewayV6 = storedGatewayV6;
-    }
-    if (defaultRouteInterfaceV6.length == 0 && storedInterfaceV6.length > 0) {
-        defaultRouteInterfaceV6 = storedInterfaceV6;
-    }
 }
 
 static NSDictionary* stopTunSession(void) {
@@ -680,9 +651,6 @@ int main(int argc, const char * argv[])
         .activeIPv4TakeoverRoutes = &activeIPv4TakeoverRoutes,
         .loadRouteBackupBlock = ^NSMutableDictionary* {
             return loadRouteBackup();
-        },
-        .hydrateBaselineRuntimeFromBackupBlock = ^(NSMutableDictionary* backup) {
-            hydrateBaselineRuntimeFromBackup(backup);
         },
         .updateRouteBackupStateBlock = ^(NSMutableDictionary* backup, NSString* state, NSString* lastError) {
             updateRouteBackupState(backup, state, lastError);

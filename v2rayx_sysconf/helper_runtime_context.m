@@ -12,17 +12,9 @@ void helperRuntimeSyncRuntimeSessionFromBackup(HelperRuntimeContext context) {
     syncRuntimeSessionFromBackup(context.activeTunName, context.activeIPv4TakeoverRoutes, context.loadRouteBackupBlock);
 }
 
-void helperRuntimeSyncRuntimeRouteBaselineFromBackup(HelperRuntimeContext context) {
-    syncRuntimeRouteBaselineFromBackup(*context.activeTunName, context.tunWg, context.routeHelper, context.defaultRouteGatewayV4, context.defaultRouteGatewayV6, context.defaultRouteInterfaceV4, context.defaultRouteInterfaceV6, context.loadRouteBackupBlock);
-}
-
 BOOL helperRuntimeLoadDefaultRouteBaseline(HelperRuntimeContext context, NSString** errorMessage) {
     return loadDefaultRouteBaseline(context.routeHelper, *context.activeTunName, context.tunWg, context.defaultRouteGatewayV4, context.defaultRouteGatewayV6, context.defaultRouteInterfaceV4, context.defaultRouteInterfaceV6, ^{
         helperRuntimeSyncRuntimeSessionFromBackup(context);
-    }, ^{
-        helperRuntimeSyncRuntimeRouteBaselineFromBackup(context);
-    }, ^(NSMutableDictionary* backup) {
-        context.hydrateBaselineRuntimeFromBackupBlock(backup);
     }, errorMessage);
 }
 
@@ -37,9 +29,7 @@ BOOL helperRuntimeRemoveIPv4TakeoverRoutes(HelperRuntimeContext context, NSStrin
 }
 
 void helperRuntimeResetTunRuntimeState(HelperRuntimeContext context, NSMutableDictionary* routeBackup, NSString* state, NSString* lastError) {
-    resetTunRuntimeState(routeBackup, state, lastError, context.activeWhitelistRoutes, context.activeIPv4TakeoverRoutes, context.activeTunName, context.defaultRouteGatewayV4, context.defaultRouteGatewayV6, context.defaultRouteInterfaceV4, context.defaultRouteInterfaceV6, ^{
-        helperRuntimeSyncRuntimeRouteBaselineFromBackup(context);
-    }, ^(NSMutableDictionary* backup, NSString* nextState, NSString* nextError) {
+    resetTunRuntimeState(routeBackup, state, lastError, context.activeWhitelistRoutes, context.activeIPv4TakeoverRoutes, context.activeTunName, context.defaultRouteGatewayV4, context.defaultRouteGatewayV6, context.defaultRouteInterfaceV4, context.defaultRouteInterfaceV6, ^(NSMutableDictionary* backup, NSString* nextState, NSString* nextError) {
         context.updateRouteBackupStateBlock(backup, nextState, nextError);
     });
 }

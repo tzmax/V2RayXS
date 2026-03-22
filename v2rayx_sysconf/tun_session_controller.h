@@ -12,8 +12,6 @@ BOOL loadDefaultRouteBaseline(SYSRouteHelper* routeHelper,
                               NSString* __strong *defaultRouteInterfaceV4,
                               NSString* __strong *defaultRouteInterfaceV6,
                               void (^syncRuntimeSessionFromBackupBlock)(void),
-                              void (^syncRuntimeRouteBaselineFromBackupBlock)(void),
-                              void (^hydrateBaselineRuntimeFromBackupBlock)(NSMutableDictionary* backup),
                               NSString** errorMessage);
 
 BOOL installIPv4TakeoverRoutes(NSString* tunName,
@@ -34,15 +32,6 @@ void syncRuntimeSessionFromBackup(NSString* __strong *activeTunName,
                                   NSMutableArray<NSDictionary*>* __strong *activeIPv4TakeoverRoutes,
                                   NSMutableDictionary* (^loadRouteBackupBlock)(void));
 
-void syncRuntimeRouteBaselineFromBackup(NSString* activeTunName,
-                                        NSString* tunWg,
-                                        SYSRouteHelper* routeHelper,
-                                        NSString* __strong *defaultRouteGatewayV4,
-                                        NSString* __strong *defaultRouteGatewayV6,
-                                        NSString* __strong *defaultRouteInterfaceV4,
-                                        NSString* __strong *defaultRouteInterfaceV6,
-                                        NSMutableDictionary* (^loadRouteBackupBlock)(void));
-
 BOOL hasUsableIPv4Baseline(SYSRouteHelper* routeHelper,
                            NSString* defaultRouteGatewayV4,
                            NSString* defaultRouteInterfaceV4);
@@ -61,7 +50,6 @@ void resetTunRuntimeState(NSMutableDictionary* routeBackup,
                           NSString* __strong *defaultRouteGatewayV6,
                           NSString* __strong *defaultRouteInterfaceV4,
                           NSString* __strong *defaultRouteInterfaceV6,
-                          void (^syncRuntimeRouteBaselineFromBackupBlock)(void),
                           void (^updateRouteBackupStateBlock)(NSMutableDictionary* backup, NSString* state, NSString* lastError));
 
 NSString* tunSessionCurrentState(NSString* activeTunName,

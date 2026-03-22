@@ -7,10 +7,6 @@ NSString* const ROUTE_BACKUP_STATE_IDLE = @"idle";
 NSString* const ROUTE_BACKUP_STATE_SWITCHING = @"switching";
 NSString* const ROUTE_BACKUP_STATE_ACTIVE = @"active";
 NSString* const ROUTE_BACKUP_TUN_NAME_KEY = @"TunName";
-NSString* const ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY = @"DefaultRouteGatewayV4";
-NSString* const ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY = @"DefaultRouteGatewayV6";
-NSString* const ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY = @"DefaultRouteInterfaceV4";
-NSString* const ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY = @"DefaultRouteInterfaceV6";
 NSString* const ROUTE_BACKUP_WHITELIST_ROUTES_KEY = @"WhitelistRoutes";
 NSString* const ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY = @"IPv4TakeoverRoutes";
 NSString* const ROUTE_BACKUP_LAST_ERROR_KEY = @"LastError";
@@ -37,18 +33,6 @@ NSMutableDictionary* loadRouteBackup(void) {
     }
     if (backup[ROUTE_BACKUP_TUN_NAME_KEY] == nil) {
         backup[ROUTE_BACKUP_TUN_NAME_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] = @"";
     }
     if (backup[ROUTE_BACKUP_WHITELIST_ROUTES_KEY] == nil) {
         backup[ROUTE_BACKUP_WHITELIST_ROUTES_KEY] = @[];
@@ -82,14 +66,7 @@ NSMutableDictionary* sanitizeLegacyRouteBackup(NSMutableDictionary* backup) {
         return [[NSMutableDictionary alloc] init];
     }
 
-    id legacyDefaultGateway = backup[@"DefaultRouteGateway"];
-    if (![backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] isKindOfClass:[NSString class]] || [backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] length] == 0) {
-        if ([legacyDefaultGateway isKindOfClass:[NSString class]] && [legacyDefaultGateway length] > 0) {
-            backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] = legacyDefaultGateway;
-        }
-    }
-
-    NSArray<NSString*>* legacyKeys = @[@"DefaultRouteGateway", @"DefaultRouteSwitched"];
+    NSArray<NSString*>* legacyKeys = @[@"DefaultRouteGateway", @"DefaultRouteSwitched", @"DefaultRouteGatewayV4", @"DefaultRouteGatewayV6", @"DefaultRouteInterfaceV4", @"DefaultRouteInterfaceV6"];
     for (NSString* key in legacyKeys) {
         [backup removeObjectForKey:key];
     }

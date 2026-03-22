@@ -15,8 +15,6 @@ BOOL loadDefaultRouteBaseline(SYSRouteHelper* routeHelper,
                               NSString* __strong *defaultRouteInterfaceV4,
                               NSString* __strong *defaultRouteInterfaceV6,
                               void (^syncRuntimeSessionFromBackupBlock)(void),
-                              void (^syncRuntimeRouteBaselineFromBackupBlock)(void),
-                              void (^hydrateBaselineRuntimeFromBackupBlock)(NSMutableDictionary* backup),
                               NSString** errorMessage) {
     if (syncRuntimeSessionFromBackupBlock != nil) {
         syncRuntimeSessionFromBackupBlock();
@@ -34,19 +32,6 @@ BOOL loadDefaultRouteBaseline(SYSRouteHelper* routeHelper,
 
     if (defaultRouteGatewayV4 != NULL && ![routeHelper isValidGateway:*defaultRouteGatewayV4]) {
         *defaultRouteGatewayV4 = @"";
-    }
-
-    if (!hasUsableIPv4Baseline(routeHelper, defaultRouteGatewayV4 != NULL ? *defaultRouteGatewayV4 : @"", defaultRouteInterfaceV4 != NULL ? *defaultRouteInterfaceV4 : @"")) {
-        if (syncRuntimeRouteBaselineFromBackupBlock != nil) {
-            syncRuntimeRouteBaselineFromBackupBlock();
-        }
-    }
-
-    if (!hasUsableIPv4Baseline(routeHelper, defaultRouteGatewayV4 != NULL ? *defaultRouteGatewayV4 : @"", defaultRouteInterfaceV4 != NULL ? *defaultRouteInterfaceV4 : @"")) {
-        NSMutableDictionary* backup = loadRouteBackup();
-        if (hydrateBaselineRuntimeFromBackupBlock != nil) {
-            hydrateBaselineRuntimeFromBackupBlock(backup);
-        }
     }
 
     if (!hasUsableIPv4Baseline(routeHelper, defaultRouteGatewayV4 != NULL ? *defaultRouteGatewayV4 : @"", defaultRouteInterfaceV4 != NULL ? *defaultRouteInterfaceV4 : @"")) {
@@ -134,32 +119,6 @@ void syncRuntimeSessionFromBackup(NSString* __strong *activeTunName,
     }
 }
 
-void syncRuntimeRouteBaselineFromBackup(NSString* activeTunName,
-                                        NSString* tunWg,
-                                        SYSRouteHelper* routeHelper,
-                                        NSString* __strong *defaultRouteGatewayV4,
-                                        NSString* __strong *defaultRouteGatewayV6,
-                                        NSString* __strong *defaultRouteInterfaceV4,
-                                        NSString* __strong *defaultRouteInterfaceV6,
-                                        NSMutableDictionary* (^loadRouteBackupBlock)(void)) {
-    NSMutableDictionary* backup = loadRouteBackupBlock != nil ? loadRouteBackupBlock() : loadRouteBackup();
-    if ((defaultRouteGatewayV4 != NULL && (*defaultRouteGatewayV4).length == 0) || isTunManagedIPv4Route(defaultRouteGatewayV4 != NULL ? *defaultRouteGatewayV4 : @"", defaultRouteInterfaceV4 != NULL ? *defaultRouteInterfaceV4 : @"", activeTunName, tunWg)) {
-        if (defaultRouteGatewayV4 != NULL) *defaultRouteGatewayV4 = backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] ?: @"";
-    }
-    if (defaultRouteGatewayV6 != NULL && (*defaultRouteGatewayV6).length == 0) {
-        *defaultRouteGatewayV6 = backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] ?: @"";
-    }
-    if ((defaultRouteInterfaceV4 != NULL && (*defaultRouteInterfaceV4).length == 0) || isTunManagedIPv4Route(defaultRouteGatewayV4 != NULL ? *defaultRouteGatewayV4 : @"", defaultRouteInterfaceV4 != NULL ? *defaultRouteInterfaceV4 : @"", activeTunName, tunWg)) {
-        if (defaultRouteInterfaceV4 != NULL) *defaultRouteInterfaceV4 = backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] ?: @"";
-    }
-    if (defaultRouteInterfaceV6 != NULL && (*defaultRouteInterfaceV6).length == 0) {
-        *defaultRouteInterfaceV6 = backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] ?: @"";
-    }
-    if (defaultRouteGatewayV4 != NULL && ![routeHelper isValidGateway:*defaultRouteGatewayV4]) {
-        *defaultRouteGatewayV4 = @"";
-    }
-}
-
 BOOL hasUsableIPv4Baseline(SYSRouteHelper* routeHelper,
                            NSString* defaultRouteGatewayV4,
                            NSString* defaultRouteInterfaceV4) {
@@ -194,11 +153,7 @@ void resetTunRuntimeState(NSMutableDictionary* routeBackup,
                           NSString* __strong *defaultRouteGatewayV6,
                           NSString* __strong *defaultRouteInterfaceV4,
                           NSString* __strong *defaultRouteInterfaceV6,
-                          void (^syncRuntimeRouteBaselineFromBackupBlock)(void),
                           void (^updateRouteBackupStateBlock)(NSMutableDictionary* backup, NSString* state, NSString* lastError)) {
-    if (syncRuntimeRouteBaselineFromBackupBlock != nil) {
-        syncRuntimeRouteBaselineFromBackupBlock();
-    }
     if (activeTunName != NULL) *activeTunName = @"";
     if (defaultRouteGatewayV4 != NULL) *defaultRouteGatewayV4 = @"";
     if (defaultRouteGatewayV6 != NULL) *defaultRouteGatewayV6 = @"";

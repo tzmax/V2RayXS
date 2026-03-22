@@ -15,7 +15,6 @@ typedef struct {
     NSMutableDictionary<NSString*, NSDictionary*>* activeWhitelistRoutes;
     NSMutableArray<NSDictionary*>* __strong *activeIPv4TakeoverRoutes;
     NSMutableDictionary* (^loadRouteBackupBlock)(void);
-    void (^hydrateBaselineRuntimeFromBackupBlock)(NSMutableDictionary* backup);
     void (^updateRouteBackupStateBlock)(NSMutableDictionary* backup, NSString* state, NSString* lastError);
     NSString* (^currentSessionTypeBlock)(void);
     NSString* (^currentSessionOwnerBlock)(void);
@@ -24,7 +23,6 @@ typedef struct {
 
 NSDictionary* helperRuntimeUpdateBackupForActiveRoutes(HelperRuntimeContext context, NSString* state, NSString* lastError);
 void helperRuntimeSyncRuntimeSessionFromBackup(HelperRuntimeContext context);
-void helperRuntimeSyncRuntimeRouteBaselineFromBackup(HelperRuntimeContext context);
 BOOL helperRuntimeLoadDefaultRouteBaseline(HelperRuntimeContext context, NSString** errorMessage);
 BOOL helperRuntimeInstallIPv4TakeoverRoutes(HelperRuntimeContext context, NSString* tunName, NSMutableDictionary* backup, NSString** errorMessage);
 BOOL helperRuntimeRemoveIPv4TakeoverRoutes(HelperRuntimeContext context, NSString* tunName, NSString** errorMessage);
