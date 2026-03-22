@@ -15,12 +15,40 @@
 #import "ConfigImporter.h"
 #import "NSData+AES256Encryption.h"
 #import <sys/stat.h>
+#import <sys/wait.h>
 #import <sys/socket.h>
 #import <sys/uio.h>
+#import <spawn.h>
 #import <fcntl.h>
 #import <netdb.h>
+#import <stdarg.h>
 
 #define kUseAllServer -10
+
+typedef NS_ENUM(NSInteger, RuntimeCoreKind) {
+    RuntimeCoreKindStopped = 0,
+    RuntimeCoreKindPlain,
+    RuntimeCoreKindTun,
+};
+
+typedef struct {
+    BOOL enabled;
+    ProxyMode mode;
+    RuntimeCoreKind coreKind;
+} RuntimeState;
+
+typedef struct {
+    BOOL previousModeIsTun;
+    BOOL nextModeIsTun;
+    BOOL shouldStopCore;
+    BOOL shouldStopTunSession;
+    BOOL shouldStartCore;
+    BOOL shouldApplyNetworkMode;
+    BOOL shouldRefreshTunSession;
+    BOOL shouldBackupSystemProxy;
+    BOOL shouldRestoreSystemProxy;
+    BOOL shouldDisableSystemProxy;
+} RuntimeTransitionPlan;
 
 @interface AppDelegate () {
     GCDWebServer *webServer;
@@ -29,21 +57,42 @@
     dispatch_queue_t taskQueue;
     dispatch_queue_t coreLoopQueue;
     dispatch_semaphore_t coreLoopSemaphore;
-    NSTask* coreProcess;
+    pid_t coreProcessPID;
+    int coreProcessStatus;
+    int coreTunFD;
+    NSString* coreConfigPath;
     dispatch_source_t dispatchPacSource;
+    dispatch_source_t terminationSignalSource;
+    dispatch_source_t interruptSignalSource;
     FSEventStreamRef fsEventStream;
+    BOOL suppressAutomaticTunRefreshDuringCoreConfigChange;
     
     NSData* v2rayJSONconfig;
 }
 
 - (NSString*)helperInstallSourcePath;
 - (NSDictionary*)allocateTunFDWithPreferredName:(NSString*)preferredName error:(NSString**)errorMessage;
+- (BOOL)waitForTunInterfaceNamed:(NSString*)tunName timeout:(NSTimeInterval)timeout;
 - (NSString*)shellEscapedArgument:(NSString*)argument;
 - (NSString*)appleScriptStringLiteral:(NSString*)value;
 - (BOOL)installHelperBinary:(NSString**)errorMessage;
 - (BOOL)helperBinaryAtPathIsHealthy:(NSString*)helperPath error:(NSString**)errorMessage;
 - (NSString*)helperVersionAtPath:(NSString*)helperPath error:(NSString**)errorMessage;
 - (BOOL)helperVersionAtPathMatchesCurrentVersion:(NSString*)helperPath error:(NSString**)errorMessage;
+- (void)restoreStartupRuntimeState;
+- (RuntimeState)currentRuntimeState;
+- (RuntimeState)runtimeStateWithEnabled:(BOOL)enabled mode:(ProxyMode)mode;
+- (RuntimeTransitionPlan)transitionPlanFromState:(RuntimeState)previousState toState:(RuntimeState)nextState userInitiated:(BOOL)isUserInitiated startupRestore:(BOOL)isStartupRestore;
+- (void)normalizeCurrentRuntimeSelections;
+- (void)applyStatusChangeFromSender:(id)sender startupRestore:(BOOL)isStartupRestore;
+- (void)applyStatusTransitionFromEnabled:(BOOL)previousEnabled toEnabled:(BOOL)nextEnabled startupRestore:(BOOL)isStartupRestore;
+- (void)applyModeChangeFromSender:(id)sender userInitiated:(BOOL)isUserInitiated;
+- (void)applyModeTransitionFrom:(ProxyMode)previousMode to:(ProxyMode)nextMode userInitiated:(BOOL)isUserInitiated sender:(id)sender;
+- (void)applyNonTunModeTransitionFrom:(ProxyMode)previousMode to:(ProxyMode)nextMode userInitiated:(BOOL)isUserInitiated sender:(id)sender applyNetworkMode:(BOOL)applyNetworkMode;
+- (void)runAutomationModeTransitionIfNeeded;
+- (NSMenuItem*)menuItemForAutomationMode:(NSString*)modeName;
+- (void)runAutomationStatusTransitionIfNeeded;
+- (void)ensureCoreLogDirectoryExists;
 
 @end
 
@@ -52,6 +101,39 @@
 static AppDelegate *appDelegate;
 static BOOL helperTunSessionActive = NO;
 static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
+static int const kXrayTunFDTarget = 3;
+
+extern char **environ;
+
+static BOOL appDebugEnabled(void) {
+    return [[[NSProcessInfo processInfo] arguments] containsObject:@"--debug"];
+}
+
+static void appDebugLog(NSString* format, ...) {
+    if (!appDebugEnabled()) {
+        return;
+    }
+    va_list args;
+    va_start(args, format);
+    NSString* message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSLog(@"[debug] %@", message);
+}
+
+static NSFileHandle* nullInputHandle(void) {
+    return [NSFileHandle fileHandleWithNullDevice];
+}
+
+static BOOL shouldEnableHelperDebugLogging(void) {
+    return [[[NSProcessInfo processInfo] arguments] containsObject:@"--debug"];
+}
+
+static NSArray* helperArgumentsWithOptionalDebug(NSArray* arguments) {
+    if (!shouldEnableHelperDebugLogging() || [arguments containsObject:@"--debug"]) {
+        return arguments;
+    }
+    return [arguments arrayByAddingObject:@"--debug"];
+}
 
 static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     if (socketFD < 0) {
@@ -103,6 +185,130 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     };
 }
 
+static char** buildSpawnCStringArray(NSArray<NSString*>* components) {
+    NSUInteger count = components.count;
+    char** array = calloc(count + 1, sizeof(char*));
+    if (array == NULL) {
+        return NULL;
+    }
+    for (NSUInteger index = 0; index < count; index++) {
+        array[index] = strdup([components[index] UTF8String]);
+        if (array[index] == NULL) {
+            for (NSUInteger cleanupIndex = 0; cleanupIndex < index; cleanupIndex++) {
+                free(array[cleanupIndex]);
+            }
+            free(array);
+            return NULL;
+        }
+    }
+    array[count] = NULL;
+    return array;
+}
+
+static void freeSpawnCStringArray(char** array) {
+    if (array == NULL) {
+        return;
+    }
+    for (NSUInteger index = 0; array[index] != NULL; index++) {
+        free(array[index]);
+    }
+    free(array);
+}
+
+static NSArray<NSString*>* buildSpawnEnvironmentComponents(NSDictionary<NSString*, NSString*>* overrides) {
+    NSMutableDictionary<NSString*, NSString*>* mergedEnvironment = [[[NSProcessInfo processInfo] environment] mutableCopy];
+    [mergedEnvironment addEntriesFromDictionary:overrides ?: @{}];
+    NSMutableArray<NSString*>* components = [[NSMutableArray alloc] initWithCapacity:mergedEnvironment.count];
+    [mergedEnvironment enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *obj, BOOL *stop) {
+        [components addObject:[NSString stringWithFormat:@"%@=%@", key, obj]];
+    }];
+    return components;
+}
+
+static int spawnProcess(NSString* launchPath, NSArray<NSString*>* arguments, NSDictionary<NSString*, NSString*>* environmentOverrides, int mappedFDSource, int mappedFDTarget, pid_t* pidOut) {
+    if (launchPath.length == 0 || pidOut == NULL) {
+        return EINVAL;
+    }
+
+    NSMutableArray<NSString*>* argvComponents = [[NSMutableArray alloc] init];
+    [argvComponents addObject:launchPath];
+    if (arguments.count > 0) {
+        [argvComponents addObjectsFromArray:arguments];
+    }
+    NSArray<NSString*>* environmentComponents = buildSpawnEnvironmentComponents(environmentOverrides);
+    char** argv = buildSpawnCStringArray(argvComponents);
+    char** envp = buildSpawnCStringArray(environmentComponents);
+    if (argv == NULL || envp == NULL) {
+        freeSpawnCStringArray(argv);
+        freeSpawnCStringArray(envp);
+        return ENOMEM;
+    }
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    if (mappedFDSource >= 0 && mappedFDTarget >= 0) {
+        posix_spawn_file_actions_adddup2(&actions, mappedFDSource, mappedFDTarget);
+        if (mappedFDSource != mappedFDTarget) {
+            posix_spawn_file_actions_addclose(&actions, mappedFDSource);
+        }
+    }
+
+    int spawnError = posix_spawn(pidOut, [launchPath fileSystemRepresentation], &actions, NULL, argv, envp);
+    posix_spawn_file_actions_destroy(&actions);
+    freeSpawnCStringArray(argv);
+    freeSpawnCStringArray(envp);
+    return spawnError;
+}
+
+static int waitForSpawnedProcess(pid_t pid, int* statusOut) {
+    int status = 0;
+    pid_t waitResult = waitpid(pid, &status, 0);
+    if (waitResult < 0) {
+        return errno;
+    }
+    if (statusOut != NULL) {
+        *statusOut = status;
+    }
+    return 0;
+}
+
+static int terminateSpawnedProcess(pid_t pid, NSTimeInterval timeout, int* statusOut) {
+    if (pid <= 0) {
+        return 0;
+    }
+    kill(pid, SIGTERM);
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:MAX(timeout, 0)];
+    int status = 0;
+    while ([[NSDate date] compare:deadline] != NSOrderedDescending) {
+        pid_t waitResult = waitpid(pid, &status, WNOHANG);
+        if (waitResult == pid) {
+            if (statusOut != NULL) {
+                *statusOut = status;
+            }
+            return 0;
+        }
+        if (waitResult < 0 && errno == ECHILD) {
+            if (statusOut != NULL) {
+                *statusOut = 0;
+            }
+            return 0;
+        }
+        [NSThread sleepForTimeInterval:0.1];
+    }
+    kill(pid, SIGKILL);
+    return waitForSpawnedProcess(pid, statusOut);
+}
+
+static int normalizedExitCodeFromWaitStatus(int status) {
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return WTERMSIG(status);
+    }
+    return status;
+}
+
 - (NSData*)v2rayJSONconfig {
     return v2rayJSONconfig;
 }
@@ -116,17 +322,13 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
         return nil;
     }
 
-    int flags = fcntl(sockets[1], F_GETFD);
-    if (flags >= 0) {
-        fcntl(sockets[1], F_SETFD, flags & ~FD_CLOEXEC);
-    }
-
-    NSString* socketFDString = [NSString stringWithFormat:@"%d", sockets[1]];
+    NSString* socketFDString = @"0";
     NSArray* arguments = preferredName.length > 0 ? @[@"tun", @"allocate", preferredName, socketFDString] : @[@"tun", @"allocate", socketFDString];
+    arguments = helperArgumentsWithOptionalDebug(arguments);
+    int helperSocketFD = sockets[1];
     NSDictionary* helperResult = runCommandLineResultWithSetup(kV2RayXHelper, arguments, ^(NSTask* task) {
-        NSMutableDictionary* environment = [[[NSProcessInfo processInfo] environment] mutableCopy];
-        environment[@"V2RAYXS_TUN_FD_SOCKET"] = socketFDString;
-        [task setEnvironment:environment];
+        NSFileHandle* socketHandle = [[NSFileHandle alloc] initWithFileDescriptor:helperSocketFD closeOnDealloc:NO];
+        [task setStandardInput:socketHandle];
     });
     close(sockets[1]);
     if ([helperResult[@"exitCode"] intValue] != 0) {
@@ -223,17 +425,37 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     // create a loop to run core
     coreLoopSemaphore = dispatch_semaphore_create(0);
     coreLoopQueue = dispatch_queue_create("cenmrev.v2rayxs.coreloop", DISPATCH_QUEUE_SERIAL);
+    signal(SIGTERM, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    terminationSignalSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_main_queue());
+    interruptSignalSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(terminationSignalSource, ^{
+        [self unloadV2ray];
+        [self stopTunRoutingSession];
+        [[NSApplication sharedApplication] terminate:nil];
+    });
+    dispatch_source_set_event_handler(interruptSignalSource, ^{
+        [self unloadV2ray];
+        [self stopTunRoutingSession];
+        [[NSApplication sharedApplication] terminate:nil];
+    });
+    dispatch_resume(terminationSignalSource);
+    dispatch_resume(interruptSignalSource);
     
     
     dispatch_async(coreLoopQueue, ^{
         while (true) {
             dispatch_semaphore_wait(self->coreLoopSemaphore, DISPATCH_TIME_FOREVER);
-            self->coreProcess = [[NSTask alloc] init];
+            self->coreProcessPID = 0;
+            self->coreProcessStatus = 0;
+            self->coreTunFD = -1;
+            self->coreConfigPath = nil;
             NSDictionary* xrayTunFDContext = nil;
             if (self->proxyState && self->proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun]) {
                 NSString* preferredTunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
                 NSString* tunFDError = nil;
-                    xrayTunFDContext = [self allocateTunFDWithPreferredName:preferredTunName error:&tunFDError];
+                appDebugLog(@"coreLoop preparing tun fd preferred=%@", preferredTunName ?: @"");
+                xrayTunFDContext = [self allocateTunFDWithPreferredName:preferredTunName error:&tunFDError];
                 if (xrayTunFDContext == nil) {
                     NSLog(@"%@", tunFDError ?: @"Failed to prepare tun fd for Xray.");
                     helperTunSessionActive = NO;
@@ -242,37 +464,51 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
                 }
                 NSString* actualTunName = xrayTunFDContext[@"tunName"];
                 if ([actualTunName isKindOfClass:[NSString class]] && actualTunName.length > 0) {
+                    appDebugLog(@"coreLoop prepared tun fd actual=%@ fd=%@", actualTunName, xrayTunFDContext[@"fd"]);
                     [[NSUserDefaults standardUserDefaults] setObject:actualTunName forKey:@"xrayTunInterfaceName"];
                 }
             }
-            if (@available(macOS 10.13, *)) {
-                [self->coreProcess setExecutableURL:[NSURL fileURLWithPath:[self getV2rayPath]]];
-            } else {
-                [self->coreProcess setLaunchPath:[self getV2rayPath]];
-            }
-            [self->coreProcess setArguments:@[@"-config", @"stdin:"]];
+            [self ensureCoreLogDirectoryExists];
+            NSString* temporaryConfigPath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"v2rayxs-xray-%@.json", [[NSUUID UUID] UUIDString]]];
+            NSData* configData = [NSJSONSerialization dataWithJSONObject:[self generateConfigFile] options:0 error:nil];
+            [configData writeToFile:temporaryConfigPath atomically:YES];
+            self->coreConfigPath = temporaryConfigPath;
+            NSArray* coreArguments = @[@"-config", temporaryConfigPath];
+            NSMutableDictionary* environmentOverrides = [[NSMutableDictionary alloc] init];
             if (xrayTunFDContext != nil) {
                 int tunFD = [xrayTunFDContext[@"fd"] intValue];
                 fcntl(tunFD, F_SETFD, 0);
-                NSMutableDictionary* environment = [[[NSProcessInfo processInfo] environment] mutableCopy];
-                environment[@"xray.tun.fd"] = [NSString stringWithFormat:@"%d", tunFD];
-                environment[@"XRAY_TUN_FD"] = [NSString stringWithFormat:@"%d", tunFD];
-                [self->coreProcess setEnvironment:environment];
+                self->coreTunFD = tunFD;
+                environmentOverrides[@"xray.tun.fd"] = [NSString stringWithFormat:@"%d", kXrayTunFDTarget];
+                environmentOverrides[@"XRAY_TUN_FD"] = [NSString stringWithFormat:@"%d", kXrayTunFDTarget];
             }
-            NSPipe* stdinpipe = [NSPipe pipe];
-            [self->coreProcess setStandardInput:stdinpipe];
-            NSData* configData = [NSJSONSerialization dataWithJSONObject:[self generateConfigFile] options:0 error:nil];
-            [[stdinpipe fileHandleForWriting] writeData:configData];
-            [self->coreProcess launch];
-            [[stdinpipe fileHandleForWriting] closeFile];
-            [self->coreProcess waitUntilExit];
-            if (xrayTunFDContext != nil) {
-                int tunFD = [xrayTunFDContext[@"fd"] intValue];
-                if (tunFD >= 0) {
-                    close(tunFD);
+            int spawnError = spawnProcess([self getV2rayPath], coreArguments, environmentOverrides, self->coreTunFD, xrayTunFDContext != nil ? kXrayTunFDTarget : -1, &self->coreProcessPID);
+            if (spawnError != 0) {
+                if (self->coreTunFD >= 0) {
+                    close(self->coreTunFD);
+                    self->coreTunFD = -1;
                 }
+                if (self->coreConfigPath.length > 0) {
+                    [[NSFileManager defaultManager] removeItemAtPath:self->coreConfigPath error:nil];
+                    self->coreConfigPath = nil;
+                }
+                NSString* message = [NSString stringWithFormat:@"Failed to start Xray (spawn error %d).", spawnError];
+                NSLog(@"%@", message);
+                [self presentHelperFailureAlert:message];
+                continue;
             }
-            NSLog(@"core exit with code %d", [self->coreProcess terminationStatus]);
+            appDebugLog(@"coreLoop spawned pid=%d mode=%ld tunFD=%d tunName=%@", self->coreProcessPID, (long)self->proxyMode, self->coreTunFD, xrayTunFDContext[@"tunName"] ?: @"");
+            waitForSpawnedProcess(self->coreProcessPID, &self->coreProcessStatus);
+            if (self->coreTunFD >= 0) {
+                close(self->coreTunFD);
+                self->coreTunFD = -1;
+            }
+            if (self->coreConfigPath.length > 0) {
+                [[NSFileManager defaultManager] removeItemAtPath:self->coreConfigPath error:nil];
+                self->coreConfigPath = nil;
+            }
+            NSLog(@"core exit with code %d", normalizedExitCodeFromWaitStatus(self->coreProcessStatus));
+            self->coreProcessPID = 0;
         }
     });
     
@@ -400,7 +636,18 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     [_statusBarItem setMenu:_statusBarMenu];
     [self probeTunRoutingSessionState];
     // start proxy
-    [self updateSubscriptions:self]; // also includes [self didChangeStatus:self];
+    [self updateSubscriptions:self]; // startup restore is handled after subscriptions are loaded
+}
+
+- (void)ensureCoreLogDirectoryExists {
+    NSFileManager* fileManager = [NSFileManager defaultManager];
+    if (logDirPath.length == 0) {
+        NSString* logDirName = @"cenmrev.v2rayx.log";
+        logDirPath = [NSString stringWithFormat:@"%@%@", NSTemporaryDirectory(), logDirName];
+    }
+    [fileManager createDirectoryAtPath:logDirPath withIntermediateDirectories:YES attributes:nil error:nil];
+    [fileManager createFileAtPath:[NSString stringWithFormat:@"%@/access.log", logDirPath] contents:nil attributes:nil];
+    [fileManager createFileAtPath:[NSString stringWithFormat:@"%@/error.log", logDirPath] contents:nil attributes:nil];
 }
 
 - (BOOL)installHelper:(BOOL)force {
@@ -644,7 +891,7 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
 }
 
 - (BOOL)runHelperCommand:(NSArray*)arguments action:(NSString*)action {
-    NSDictionary* taskResult = runCommandLineResult(kV2RayXHelper, arguments);
+    NSDictionary* taskResult = runCommandLineResult(kV2RayXHelper, helperArgumentsWithOptionalDebug(arguments));
     int exitCode = [taskResult[@"exitCode"] intValue];
     if (exitCode == 0) {
         return YES;
@@ -812,6 +1059,7 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     NSPipe *stderrpipe = [NSPipe pipe];
     [task setStandardOutput:stdoutpipe];
     [task setStandardError:stderrpipe];
+    [task setStandardInput:nullInputHandle()];
     @try {
         [task launch];
     } @catch (NSException *exception) {
@@ -838,11 +1086,10 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
 }
 
 - (void)stopTunRoutingSession {
-    if (![self hasActiveTunRoutingSession]) {
+    if (![self hasActiveTunRoutingSession] && !helperTunSessionActive && proxyMode != tunMode) {
         return;
     }
-    helperTunSessionActive = NO;
-    dispatch_async(taskQueue, ^{
+    dispatch_sync(taskQueue, ^{
         closeHelperApplicationTask();
     });
 }
@@ -853,6 +1100,7 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
         return;
     }
     helperTunSessionActive = YES;
+    appDebugLog(@"refreshTunRoutingSession entering proxyMode=%ld corePID=%d helperActive=%d", (long)proxyMode, coreProcessPID, helperTunSessionActive);
     [self updateSystemProxy];
 }
 
@@ -876,6 +1124,7 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     }
     NSPipe* stdoutPipe = [NSPipe pipe];
     [task setStandardOutput:stdoutPipe];
+    [task setStandardInput:nullInputHandle()];
     @try {
         [task launch];
         [task waitUntilExit];
@@ -896,6 +1145,20 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
         }
     }];
     return interfaces;
+}
+
+- (BOOL)waitForTunInterfaceNamed:(NSString*)tunName timeout:(NSTimeInterval)timeout {
+    if (![tunName isKindOfClass:[NSString class]] || tunName.length == 0) {
+        return NO;
+    }
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:MAX(timeout, 0)];
+    while ([[NSDate date] compare:deadline] != NSOrderedDescending) {
+        if ([[self existingUtunInterfaces] containsObject:tunName]) {
+            return YES;
+        }
+        [NSThread sleepForTimeInterval:0.1];
+    }
+    return [[self existingUtunInterfaces] containsObject:tunName];
 }
 
 - (BOOL)isSysconfVersionOK {
@@ -1110,11 +1373,17 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
 }
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
-    // close the tun device helper
+    [self unloadV2ray];
     [self stopTunRoutingSession];
     //stop monitor pac
     if (dispatchPacSource) {
         dispatch_source_cancel(dispatchPacSource);
+    }
+    if (terminationSignalSource) {
+        dispatch_source_cancel(terminationSignalSource);
+    }
+    if (interruptSignalSource) {
+        dispatch_source_cancel(interruptSignalSource);
     }
     //unload v2ray
     //runCommandLine(@"/bin/launchctl", @[@"unload", plistPath]);
@@ -1126,7 +1395,9 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     [self saveAppStatus];
     //turn off proxy
     if (proxyState && proxyMode != manualMode) {
-        _enableRestore ? [self restoreSystemProxy] : [self cancelSystemProxy]; //restore system proxy
+        NSArray* arguments = _enableRestore ? @[@"restore"] : @[@"off"];
+        NSString* action = _enableRestore ? @"restore system proxy during termination" : @"disable system proxy during termination";
+        [self runHelperCommand:arguments action:action];
     }
 }
 
@@ -1162,13 +1433,150 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     });
 }
 
-- (IBAction)didChangeStatus:(id)sender {
+- (void)restoreStartupRuntimeState {
     [self probeTunRoutingSessionState];
-    NSInteger previousStatus = proxyState;
-    BOOL wasMaintainingTunRoutingSession = [self shouldMaintainTunRoutingSession];
-    if (sender == self) {
-        previousStatus = false;
+    [self normalizeCurrentRuntimeSelections];
+    RuntimeState previousState = [self runtimeStateWithEnabled:NO mode:proxyMode];
+    RuntimeState nextState = [self currentRuntimeState];
+    RuntimeTransitionPlan plan = [self transitionPlanFromState:previousState toState:nextState userInitiated:NO startupRestore:YES];
+
+    if (plan.shouldBackupSystemProxy) {
+        [self backupSystemProxy];
     }
+
+    suppressAutomaticTunRefreshDuringCoreConfigChange = plan.shouldRefreshTunSession;
+    [self coreConfigDidChange:self];
+    suppressAutomaticTunRefreshDuringCoreConfigChange = NO;
+
+    if (plan.shouldApplyNetworkMode) {
+        [self updateSystemProxy];
+    } else if (plan.shouldRefreshTunSession) {
+        [self refreshTunRoutingSession];
+    }
+
+    [self updateMenus];
+    [self updatePacMenuList];
+    [self runAutomationStatusTransitionIfNeeded];
+    [self runAutomationModeTransitionIfNeeded];
+}
+
+- (RuntimeState)currentRuntimeState {
+    return [self runtimeStateWithEnabled:proxyState mode:proxyMode];
+}
+
+- (RuntimeState)runtimeStateWithEnabled:(BOOL)enabled mode:(ProxyMode)mode {
+    RuntimeState state;
+    state.enabled = enabled;
+    state.mode = mode;
+    if (!enabled) {
+        state.coreKind = RuntimeCoreKindStopped;
+    } else if (mode == tunMode) {
+        state.coreKind = RuntimeCoreKindTun;
+    } else {
+        state.coreKind = RuntimeCoreKindPlain;
+    }
+    return state;
+}
+
+- (RuntimeTransitionPlan)transitionPlanFromState:(RuntimeState)previousState toState:(RuntimeState)nextState userInitiated:(BOOL)isUserInitiated startupRestore:(BOOL)isStartupRestore {
+    RuntimeTransitionPlan plan = {0};
+    plan.previousModeIsTun = (previousState.mode == tunMode);
+    plan.nextModeIsTun = (nextState.mode == tunMode);
+
+    if (isUserInitiated && previousState.enabled && previousState.mode == manualMode && nextState.mode != manualMode) {
+        plan.shouldBackupSystemProxy = YES;
+    }
+    if (isUserInitiated && previousState.enabled && previousState.mode != manualMode && nextState.mode == manualMode) {
+        plan.shouldRestoreSystemProxy = _enableRestore;
+        plan.shouldDisableSystemProxy = !_enableRestore;
+    }
+    if (!isUserInitiated && !isStartupRestore && previousState.mode != manualMode) {
+        if (!previousState.enabled && nextState.enabled) {
+            plan.shouldBackupSystemProxy = YES;
+        } else if (previousState.enabled && !nextState.enabled) {
+            plan.shouldRestoreSystemProxy = _enableRestore;
+            plan.shouldDisableSystemProxy = !_enableRestore;
+        }
+    }
+
+    plan.shouldStopCore = previousState.coreKind != RuntimeCoreKindStopped &&
+        ((nextState.coreKind == RuntimeCoreKindStopped) || (previousState.coreKind != nextState.coreKind));
+    plan.shouldStopTunSession = plan.previousModeIsTun && (!plan.nextModeIsTun || nextState.coreKind == RuntimeCoreKindStopped);
+    plan.shouldStartCore = nextState.coreKind != RuntimeCoreKindStopped &&
+        (previousState.coreKind == RuntimeCoreKindStopped || previousState.coreKind != nextState.coreKind);
+    plan.shouldApplyNetworkMode = nextState.enabled && !plan.nextModeIsTun;
+    plan.shouldRefreshTunSession = nextState.enabled && plan.nextModeIsTun && (isStartupRestore || !plan.previousModeIsTun || previousState.coreKind != nextState.coreKind);
+    return plan;
+}
+
+- (void)normalizeCurrentRuntimeSelections {
+    selectedServerIndex = MIN((NSInteger)profiles.count + (NSInteger)_subsOutbounds.count - 1, selectedServerIndex);
+    if (profiles.count + _subsOutbounds.count > 0) {
+        selectedServerIndex = MAX(selectedServerIndex, 0);
+    }
+    selectedCusServerIndex = MIN((NSInteger)cusProfiles.count - 1, selectedCusServerIndex);
+    _selectedRoutingSet = MIN((NSInteger)_routingRuleSets.count - 1, _selectedRoutingSet);
+
+    if ((!useMultipleServer && selectedServerIndex == -1 && selectedCusServerIndex == -1) || (useMultipleServer && profiles.count + _subsOutbounds.count < 1)) {
+        proxyState = false;
+    } else if (!useMultipleServer && selectedCusServerIndex == -1) {
+        useCusProfile = false;
+    } else if (!useMultipleServer && selectedServerIndex == -1) {
+        useCusProfile = true;
+    }
+}
+
+- (void)runAutomationStatusTransitionIfNeeded {
+    NSArray<NSString*>* arguments = [[NSProcessInfo processInfo] arguments];
+    NSUInteger optionIndex = [arguments indexOfObject:@"--automation-status"];
+    if (optionIndex == NSNotFound || optionIndex + 1 >= arguments.count) {
+        return;
+    }
+    NSString* statusValue = arguments[optionIndex + 1];
+    BOOL targetEnabled = ![statusValue isEqualToString:@"off"];
+    if (proxyState == targetEnabled) {
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self didChangeStatus:self->_enableV2rayItem];
+    });
+}
+
+- (NSMenuItem*)menuItemForAutomationMode:(NSString*)modeName {
+    if ([modeName isEqualToString:@"pac"]) {
+        return _pacModeItem;
+    }
+    if ([modeName isEqualToString:@"global"]) {
+        return _globalModeItem;
+    }
+    if ([modeName isEqualToString:@"manual"]) {
+        return _manualModeItem;
+    }
+    if ([modeName isEqualToString:@"tun"]) {
+        return _tunModeItem;
+    }
+    return nil;
+}
+
+- (void)runAutomationModeTransitionIfNeeded {
+    NSArray<NSString*>* arguments = [[NSProcessInfo processInfo] arguments];
+    NSUInteger optionIndex = [arguments indexOfObject:@"--automation-mode"];
+    if (optionIndex == NSNotFound || optionIndex + 1 >= arguments.count) {
+        return;
+    }
+    NSString* modeName = arguments[optionIndex + 1];
+    NSMenuItem* modeItem = [self menuItemForAutomationMode:modeName];
+    if (modeItem == nil || modeItem.tag == proxyMode) {
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self didChangeMode:modeItem];
+    });
+}
+
+- (void)applyStatusChangeFromSender:(id)sender startupRestore:(BOOL)isStartupRestore {
+    [self probeTunRoutingSessionState];
+    BOOL previousStatus = proxyState;
     // sender can be
     // 1. self, when app is launched
     // 2. menuitem, when a user click on a server or a routing or updateSeverMenuItem
@@ -1177,57 +1585,103 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
         proxyState = !proxyState;
     }
     // make sure current status parameter is valid
-    selectedServerIndex = MIN((NSInteger)profiles.count + (NSInteger)_subsOutbounds.count - 1, selectedServerIndex);
-    if (profiles.count + _subsOutbounds.count > 0) {
-        selectedServerIndex = MAX(selectedServerIndex, 0);
-    }
-    selectedCusServerIndex = MIN((NSInteger)cusProfiles.count - 1, selectedCusServerIndex );
-    _selectedRoutingSet = MIN((NSInteger)_routingRuleSets.count - 1, _selectedRoutingSet);
-    
-    NSLog(@"%ld, %ld", selectedServerIndex, selectedCusServerIndex);
-    if ((!useMultipleServer && selectedServerIndex == -1 && selectedCusServerIndex == -1) || (useMultipleServer && profiles.count + _subsOutbounds.count < 1)) {
-        proxyState = false;
-    } else if (!useMultipleServer && selectedCusServerIndex == -1) {
-        useCusProfile = false;
-    } else if (!useMultipleServer && selectedServerIndex == -1) {
-        useCusProfile = true;
-    }
-    if (proxyMode != manualMode) {
-        if (previousStatus == false && proxyState == true) {
-            [self backupSystemProxy];
-        } else if (previousStatus == true && proxyState == false ) {
-            _enableRestore ? [self restoreSystemProxy] : [self cancelSystemProxy];
-        }
-    }
-    BOOL shouldMaintainTunRoutingSession = [self shouldMaintainTunRoutingSession];
-    [self coreConfigDidChange:self];
-    if (proxyState == false) {
-        [self stopTunRoutingSession];
-        [self unloadV2ray];
-    } else if (proxyMode != tunMode) {
-        [self updateSystemProxy];
-    } else if (!wasMaintainingTunRoutingSession && shouldMaintainTunRoutingSession) {
-        [self refreshTunRoutingSession];
-    }
+    [self normalizeCurrentRuntimeSelections];
+    [self applyStatusTransitionFromEnabled:isStartupRestore ? NO : previousStatus toEnabled:proxyState startupRestore:isStartupRestore];
     [self updateMenus];
     [self updatePacMenuList];
 }
 
-- (IBAction)didChangeMode:(id)sender {
-    [self probeTunRoutingSessionState];
-    ProxyMode previousMode = proxyMode;
-    if (proxyState == true && proxyMode == manualMode && [sender tag] != manualMode) {
+- (void)applyStatusTransitionFromEnabled:(BOOL)previousEnabled toEnabled:(BOOL)nextEnabled startupRestore:(BOOL)isStartupRestore {
+    RuntimeState previousState = [self runtimeStateWithEnabled:previousEnabled mode:proxyMode];
+    RuntimeState nextState = [self runtimeStateWithEnabled:nextEnabled mode:proxyMode];
+    RuntimeTransitionPlan plan = [self transitionPlanFromState:previousState toState:nextState userInitiated:NO startupRestore:isStartupRestore];
+
+    if (plan.shouldBackupSystemProxy) {
+        [self backupSystemProxy];
+    } else if (plan.shouldRestoreSystemProxy) {
+        [self restoreSystemProxy];
+    } else if (plan.shouldDisableSystemProxy) {
+        [self cancelSystemProxy];
+    }
+
+    suppressAutomaticTunRefreshDuringCoreConfigChange = plan.shouldRefreshTunSession;
+    [self coreConfigDidChange:self];
+    suppressAutomaticTunRefreshDuringCoreConfigChange = NO;
+
+    if (plan.shouldStopCore) {
+        [self unloadV2ray];
+    }
+    if (plan.shouldStopTunSession) {
+        [self stopTunRoutingSession];
+    }
+    if (plan.shouldApplyNetworkMode) {
+        [self updateSystemProxy];
+    } else if (plan.shouldRefreshTunSession) {
+        [self refreshTunRoutingSession];
+    }
+}
+
+- (void)applyNonTunModeTransitionFrom:(ProxyMode)previousMode to:(ProxyMode)nextMode userInitiated:(BOOL)isUserInitiated sender:(id)sender applyNetworkMode:(BOOL)applyNetworkMode {
+    if (isUserInitiated && proxyState == true && previousMode == manualMode && nextMode != manualMode) {
         [self backupSystemProxy];
     }
-    if (proxyState == true && proxyMode != manualMode && [sender tag] == manualMode) {
+    if (isUserInitiated && proxyState == true && previousMode != manualMode && nextMode == manualMode) {
         _enableRestore ? [self restoreSystemProxy] : [self cancelSystemProxy];
     }
-    
-    if (proxyMode == tunMode && [sender tag] != tunMode) {
+
+    proxyMode = nextMode;
+    [self updateMenus];
+    if (sender == _pacModeItem) {
+        [self updatePacMenuList];
+    }
+
+    if (proxyState == true && applyNetworkMode) {
+        [self updateSystemProxy];
+    }
+}
+
+- (void)applyModeTransitionFrom:(ProxyMode)previousMode to:(ProxyMode)nextMode userInitiated:(BOOL)isUserInitiated sender:(id)sender {
+    RuntimeState previousState = [self runtimeStateWithEnabled:proxyState mode:previousMode];
+    RuntimeState nextState = [self runtimeStateWithEnabled:proxyState mode:nextMode];
+    RuntimeTransitionPlan plan = [self transitionPlanFromState:previousState toState:nextState userInitiated:isUserInitiated startupRestore:NO];
+
+    if (!plan.previousModeIsTun && !plan.nextModeIsTun) {
+        [self applyNonTunModeTransitionFrom:previousMode to:nextMode userInitiated:isUserInitiated sender:sender applyNetworkMode:YES];
+        return;
+    }
+
+    if (proxyState == true && !plan.previousModeIsTun && plan.nextModeIsTun) {
+        appDebugLog(@"modeTransition nonTun->tun begin previous=%ld next=%ld", (long)previousMode, (long)nextMode);
+        proxyMode = nextMode;
+        [self updateMenus];
+        if (sender == _pacModeItem) {
+            [self updatePacMenuList];
+        }
+        suppressAutomaticTunRefreshDuringCoreConfigChange = YES;
+        [self coreConfigDidChange:self];
+        suppressAutomaticTunRefreshDuringCoreConfigChange = NO;
+        NSString* tunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
+        BOOL sawTunBeforeRefresh = [self waitForTunInterfaceNamed:tunName timeout:1.0];
+        appDebugLog(@"modeTransition nonTun->tun after coreConfig tunName=%@ exists=%d corePID=%d", tunName ?: @"", sawTunBeforeRefresh, coreProcessPID);
+        [self refreshTunRoutingSession];
+        return;
+    }
+
+    if (proxyState == true && plan.previousModeIsTun && !plan.nextModeIsTun) {
+        [self unloadV2ray];
+        [self stopTunRoutingSession];
+        [self applyNonTunModeTransitionFrom:previousMode to:nextMode userInitiated:isUserInitiated sender:sender applyNetworkMode:NO];
+        [self coreConfigDidChange:self];
+        [self updateSystemProxy];
+        return;
+    }
+
+    if (plan.previousModeIsTun && !plan.nextModeIsTun) {
+        [self unloadV2ray];
         [self stopTunRoutingSession];
     }
 
-    proxyMode = [sender tag];
+    proxyMode = nextMode;
     [self updateMenus];
     if (sender == _pacModeItem) {
         [self updatePacMenuList];
@@ -1239,8 +1693,24 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
             [self updateSystemProxy];
         }
     } else if (previousMode == tunMode) {
+        [self unloadV2ray];
         [self stopTunRoutingSession];
     }
+}
+
+- (void)applyModeChangeFromSender:(id)sender userInitiated:(BOOL)isUserInitiated {
+    [self probeTunRoutingSessionState];
+    ProxyMode previousMode = proxyMode;
+    ProxyMode nextMode = [sender tag];
+    [self applyModeTransitionFrom:previousMode to:nextMode userInitiated:isUserInitiated sender:sender];
+}
+
+- (IBAction)didChangeStatus:(id)sender {
+    [self applyStatusChangeFromSender:sender startupRestore:NO];
+}
+
+- (IBAction)didChangeMode:(id)sender {
+    [self applyModeChangeFromSender:sender userInitiated:YES];
 }
 
 - (void)updateMenus {
@@ -1372,7 +1842,8 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
         }
         
         dispatch_async(taskQueue, ^{
-            if(self.proxyMode == pacMode || self.proxyMode == tunMode) {
+            BOOL shouldPreDisableProxy = (self.proxyMode == pacMode) || (self.proxyMode == tunMode && !shouldUseXrayTun);
+            if (shouldPreDisableProxy) {
                 // close system proxy first to refresh pac file
                 NSString* action = self.proxyMode == pacMode ? @"disable system proxy before PAC refresh" : @"disable system proxy before enabling tun mode";
                 [self runHelperCommand:@[@"off"] action:action];
@@ -1380,6 +1851,13 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
             if (self.proxyMode == tunMode) {
                 [self syncTunWhitelistRoutes];
             }
+            if (self.proxyMode == tunMode && shouldUseXrayTun) {
+                NSString* tunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
+                appDebugLog(@"updateSystemProxy about to wait for tun %@ corePID=%d", tunName ?: @"", self->coreProcessPID);
+                (void)[self waitForTunInterfaceNamed:tunName timeout:5.0];
+                appDebugLog(@"updateSystemProxy after wait tun %@ exists=%d", tunName ?: @"", [[self existingUtunInterfaces] containsObject:tunName]);
+            }
+            appDebugLog(@"updateSystemProxy running helper args=%@", [arguments componentsJoinedByString:@" "]);
             [self runHelperCommand:arguments action:@"apply helper network settings"];
         });
     } else {
@@ -1412,7 +1890,11 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
         }
         // not safe, need to make sure every tag is unique
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self didChangeStatus:sender];
+            if (sender == self) {
+                [self restoreStartupRuntimeState];
+            } else {
+                [self didChangeStatus:sender];
+            }
         });
     });
 }
@@ -1504,7 +1986,7 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
         }
         //[self generateLaunchdPlist:plistPath];
         [self toggleCore];
-        if (shouldRefreshTunSession) {
+        if (shouldRefreshTunSession && !suppressAutomaticTunRefreshDuringCoreConfigChange) {
             [self refreshTunRoutingSession];
         }
     }
@@ -1574,8 +2056,17 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
 }
 
 -(void)unloadV2ray {
-    if (coreProcess && [coreProcess isRunning]) {
-        [coreProcess terminate];
+    if (coreProcessPID > 0) {
+        terminateSpawnedProcess(coreProcessPID, 5.0, &coreProcessStatus);
+        coreProcessPID = 0;
+    }
+    if (coreTunFD >= 0) {
+        close(coreTunFD);
+        coreTunFD = -1;
+    }
+    if (coreConfigPath.length > 0) {
+        [[NSFileManager defaultManager] removeItemAtPath:coreConfigPath error:nil];
+        coreConfigPath = nil;
     }
 //    dispatch_async(taskQueue, ^{
 //        runCommandLine(@"/bin/launchctl", @[@"unload", self->plistPath]);
@@ -1738,6 +2229,7 @@ static NSDictionary* receiveFileDescriptorAndPayload(int socketFD) {
     [task setArguments:@[@"-version"]];
     NSPipe *stdoutpipe = [NSPipe pipe];
     [task setStandardOutput:stdoutpipe];
+    [task setStandardInput:nullInputHandle()];
     @try {
         [task launch];
         [task waitUntilExit];
@@ -1815,35 +2307,48 @@ void closeHelperApplicationTask(void) {
             [helperApplicationTask interrupt];
             sleep(1);
             [helperApplicationTask terminate];
+        } else {
+            helperTunSessionActive = NO;
         }
         helperApplicationTask = NULL;
+        return;
+    }
+    if (!helperTunSessionActive) {
+        return;
+    }
+    NSString* tunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
+    NSArray* deactivateArguments = (tunName.length > 0) ? @[@"tun", @"deactivate", tunName, @"--json"] : @[@"tun", @"deactivate", @"--json"];
+    int exitCode = runCommandLine(kV2RayXHelper, deactivateArguments);
+    if (exitCode == 0) {
         helperTunSessionActive = NO;
         return;
     }
-    runCommandLine(kV2RayXHelper, @[@"tun", @"deactivate", @"--json"]);
-    helperTunSessionActive = NO;
+    NSLog(@"Failed to deactivate helper tun session (exit=%d).", exitCode);
 }
 
 NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments) {
     NSTask *task = [[NSTask alloc] init];
+    if ([launchPath isEqualToString:kV2RayXHelper]) {
+        arguments = helperArgumentsWithOptionalDebug(arguments);
+    }
     
     // take notes helperApplicationTask
     BOOL startsTunSession = arguments.count > 1 && [arguments[0] isEqual:@"tun"] && [arguments[1] isEqual:@"start"];
     BOOL activatesExternalTunSession = arguments.count > 1 && [arguments[0] isEqual:@"tun"] && [arguments[1] isEqual:@"activate"];
     BOOL talksToTunSession = (arguments.count > 1 && [arguments[0] isEqual:@"tun"] && ([arguments[1] isEqual:@"stop"] || [arguments[1] isEqual:@"status"] || [arguments[1] isEqual:@"deactivate"])) || (arguments.count > 0 && [arguments[0] isEqual:@"route"]);
-    if (!startsTunSession && !talksToTunSession) {
+    if (!startsTunSession && !activatesExternalTunSession && !talksToTunSession) {
         closeHelperApplicationTask();
     }
     if(helperApplicationTask == NULL && startsTunSession) {
         helperApplicationTask = task;
     }
-    
     [task setLaunchPath:launchPath];
     [task setArguments:arguments];
     NSPipe *stdoutpipe = [NSPipe pipe];
     [task setStandardOutput:stdoutpipe];
     NSPipe *stderrpipe = [NSPipe pipe];
     [task setStandardError:stderrpipe];
+    [task setStandardInput:nullInputHandle()];
     NSFileHandle *file;
     NSString *stdoutString = @"";
     NSString *stderrString = @"";
@@ -1877,12 +2382,16 @@ NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments) {
 
 NSDictionary* runCommandLineResultWithSetup(NSString* launchPath, NSArray* arguments, void (^setupTask)(NSTask* task)) {
     NSTask *task = [[NSTask alloc] init];
+    if ([launchPath isEqualToString:kV2RayXHelper]) {
+        arguments = helperArgumentsWithOptionalDebug(arguments);
+    }
     [task setLaunchPath:launchPath];
     [task setArguments:arguments];
     NSPipe *stdoutpipe = [NSPipe pipe];
     [task setStandardOutput:stdoutpipe];
     NSPipe *stderrpipe = [NSPipe pipe];
     [task setStandardError:stderrpipe];
+    [task setStandardInput:nullInputHandle()];
     if (setupTask != nil) {
         setupTask(task);
     }

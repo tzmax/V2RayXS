@@ -16,55 +16,20 @@
 #import <netdb.h>
 #import <Tun2socks/Tun2socks.h>
 #import "sysconf_version.h"
-#import "route.h"
-#import "tun.h"
+#import "route_helper.h"
+#import "tun_device.h"
+#import "helper_paths.h"
+#import "proxy_manager.h"
+#import "route_entry_normalizer.h"
+#import "session_backup_store.h"
+#import "session_state.h"
+#import "route_whitelist_store.h"
+#import "control_socket_transport.h"
+#import <stdarg.h>
 
-#define INFO "v2rayx_sysconf\nusage:\n  v2rayx_sysconf -v\n  v2rayx_sysconf off\n  v2rayx_sysconf auto\n  v2rayx_sysconf global <socksPort> <httpPort>\n  v2rayx_sysconf save\n  v2rayx_sysconf restore\n  v2rayx_sysconf tun start <socksPort>\n  v2rayx_sysconf tun allocate [<utunName>] <sendSocketFD>\n  v2rayx_sysconf tun activate <utunName>\n  v2rayx_sysconf tun deactivate [<utunName>] [--json]\n  v2rayx_sysconf tun stop [--json]\n  v2rayx_sysconf tun status [--json]\n  v2rayx_sysconf route add <ip...> [--json] [--require-active]\n  v2rayx_sysconf route del <ip...> [--json] [--require-active]\n  v2rayx_sysconf route list [--json]\n  v2rayx_sysconf route clear [--json] [--require-active]\n  v2rayx_sysconf route apply [--json]\n  v2rayx_sysconf route sync-file <path> [--json] [--require-active]\n"
+#define INFO "v2rayx_sysconf\nusage:\n  v2rayx_sysconf -v\n  v2rayx_sysconf off [--debug]\n  v2rayx_sysconf auto [--debug]\n  v2rayx_sysconf global <socksPort> <httpPort> [--debug]\n  v2rayx_sysconf save [--debug]\n  v2rayx_sysconf restore [--debug]\n  v2rayx_sysconf tun start <socksPort> [--debug]\n  v2rayx_sysconf tun allocate [<utunName>] <sendSocketFD> [--debug]\n  v2rayx_sysconf tun activate <utunName> [--debug]\n  v2rayx_sysconf tun deactivate [<utunName>] [--json] [--debug]\n  v2rayx_sysconf tun stop [--json] [--debug]\n  v2rayx_sysconf tun status [--json] [--debug]\n  v2rayx_sysconf route add <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route del <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route list [--json] [--debug]\n  v2rayx_sysconf route clear [--json] [--require-active] [--debug]\n  v2rayx_sysconf route apply [--json] [--debug]\n  v2rayx_sysconf route sync-file <path> [--json] [--require-active] [--debug]\n"
 
-static NSString* const V2RayXSAppSupportRelativePath = @"Library/Application Support/V2RayXS";
-static NSString* const SystemRouteBackupFilename = @"system_route_backup.plist";
-static NSString* const SystemProxyBackupFilename = @"system_proxy_backup.plist";
-static NSString* const RouteWhitelistStoreFilename = @"route_whitelist_store.plist";
-static NSString* const TunControlSocketFilename = @"tun_route.sock";
-static NSString* const TunSessionLockFilename = @"tun_session.lock";
-
-static NSString* const ROUTE_BACKUP_VERSION_KEY = @"Version";
-static NSString* const ROUTE_BACKUP_STATE_KEY = @"RouteState";
-static NSString* const ROUTE_BACKUP_STATE_IDLE = @"idle";
-static NSString* const ROUTE_BACKUP_STATE_SWITCHING = @"switching";
-static NSString* const ROUTE_BACKUP_STATE_ACTIVE = @"active";
-static NSString* const ROUTE_BACKUP_TUN_NAME_KEY = @"TunName";
-static NSString* const ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY = @"DefaultRouteGatewayV4";
-static NSString* const ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY = @"DefaultRouteGatewayV6";
-static NSString* const ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY = @"DefaultRouteInterfaceV4";
-static NSString* const ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY = @"DefaultRouteInterfaceV6";
-static NSString* const ROUTE_BACKUP_WHITELIST_ROUTES_KEY = @"WhitelistRoutes";
-static NSString* const ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY = @"IPv4TakeoverRoutes";
-static NSString* const ROUTE_BACKUP_LAST_ERROR_KEY = @"LastError";
-static NSString* const ROUTE_BACKUP_SESSION_TYPE_KEY = @"SessionType";
-static NSString* const ROUTE_BACKUP_SESSION_OWNER_KEY = @"SessionOwner";
-static NSString* const ROUTE_BACKUP_CONTROL_PLANE_KEY = @"ControlPlane";
-
-static NSString* const SESSION_TYPE_NONE = @"none";
-static NSString* const SESSION_TYPE_INTERNAL = @"internal";
-static NSString* const SESSION_TYPE_EXTERNAL_FD = @"external_fd";
-static NSString* const SESSION_OWNER_NONE = @"none";
-static NSString* const SESSION_OWNER_HELPER = @"helper";
-static NSString* const SESSION_OWNER_EXTERNAL = @"external";
-static NSString* const CONTROL_PLANE_NONE = @"none";
-static NSString* const CONTROL_PLANE_SOCKET = @"socket";
-static NSString* const CONTROL_PLANE_STATELESS = @"stateless";
 static NSArray<NSString*>* const IPv4TakeoverCIDRs = @[@"0.0.0.0/1", @"128.0.0.0/1"];
-
-static NSString* const ROUTE_STORE_VERSION_KEY = @"Version";
-static NSString* const ROUTE_STORE_ENTRIES_KEY = @"Entries";
-
-static NSString* const ENTRY_IP_KEY = @"ip";
-static NSString* const ENTRY_FAMILY_KEY = @"family";
-static NSString* const ENTRY_ENABLED_KEY = @"enabled";
-static NSString* const ENTRY_GATEWAY_KEY = @"gateway";
-static NSString* const ENTRY_INTERFACE_KEY = @"interface";
-static NSString* const ENTRY_APPLIED_KEY = @"applied";
 
 static NSInteger const EXIT_USAGE = 1;
 static NSInteger const EXIT_REQUIRE_ACTIVE = 2;
@@ -73,6 +38,7 @@ static NSInteger const EXIT_ROUTE = 4;
 static NSInteger const EXIT_TUN_FD = 5;
 
 static BOOL runLoopMark = YES;
+static BOOL debugLoggingEnabled = NO;
 static NSString* runtimeMode = @"";
 static SYSRouteHelper* routeHelper;
 static NSString* tunAddr = @"10.0.0.0";
@@ -90,63 +56,21 @@ static NSMutableDictionary<NSString*, NSDictionary*>* activeWhitelistRoutes;
 static NSMutableArray<NSDictionary*>* activeIPv4TakeoverRoutes;
 static Tun2socksTun2socksCtl* tunControl = nil;
 
-static NSString* appSupportPath(void);
-static NSURL* appSupportFileURL(NSString* filename);
-static BOOL ensureAppSupportDirectory(void);
-static NSURL* routeBackupFileURL(void);
-static NSURL* routeStoreFileURL(void);
-static NSString* controlSocketPath(void);
-static NSString* tunSessionLockPath(void);
 static BOOL acquireTunSessionLock(NSString** errorMessage);
 static void releaseTunSessionLock(void);
 static NSDictionary* makeResponse(BOOL ok, NSString* message, NSDictionary* payload);
 static void printResponse(NSDictionary* response, BOOL asJSON);
 static BOOL shouldOutputJSON(NSArray<NSString*>* arguments);
+static BOOL shouldEnableDebugLogging(NSArray<NSString*>* arguments);
+static void debugLog(NSString* format, ...);
 static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments);
-static BOOL runNetworksetup(NSArray<NSString*>* arguments);
-static BOOL setProxyFlag(NSMutableDictionary* proxies, NSString* key, BOOL enabled);
-static void disableManualProxySettings(NSMutableDictionary* proxies);
-static BOOL saveProxyBackup(NSDictionary* sets);
-static NSDictionary* loadProxyBackup(void);
-static BOOL isConfigurableProxyService(NSDictionary* service);
-static BOOL parseProxyPorts(const char* socksArg, const char* httpArg, int* localPort, int* httpPort);
-static void applyAutoProxySettings(NSMutableDictionary* proxies);
-static void applyGlobalProxySettings(NSMutableDictionary* proxies, int localPort, int httpPort);
-static void cleanupInactiveProxySettings(NSMutableDictionary* proxies, NSString* mode);
-static NSMutableDictionary* proxiesForMode(NSString* mode, NSDictionary* service, NSString* serviceID, NSDictionary* originalSets, int localPort, int httpPort);
-static BOOL applyProxyModeToServices(SCPreferencesRef prefRef, NSDictionary* sets, NSString* mode, NSDictionary* originalSets, int localPort, int httpPort);
-static BOOL createAuthorizedPreferences(SCPreferencesRef* prefRefOut);
-static BOOL configureNetworksetupProxyForService(NSString* serviceName, NSString* mode, int localPort, int httpPort);
-static BOOL applyDynamicProxyState(NSString* mode, int localPort, int httpPort);
-static BOOL runProxySaveMode(void);
-static BOOL applySystemProxyMode(NSString* mode, NSDictionary* originalSets, int localPort, int httpPort);
-static NSMutableDictionary* loadRouteBackup(void);
-static BOOL saveRouteBackup(NSMutableDictionary* backup);
-static NSMutableDictionary* sanitizeLegacyRouteBackup(NSMutableDictionary* backup);
-static NSMutableDictionary* loadRouteStore(void);
-static BOOL saveRouteStore(NSDictionary* store);
-static NSString* familyStringForFamily(SYSRouteAddressFamily family);
-static SYSRouteAddressFamily familyFromString(NSString* familyString);
-static NSString* normalizedIPAddressString(NSString* ipAddress, SYSRouteAddressFamily family);
-static NSArray<NSDictionary*>* normalizedEntriesFromArray(NSArray* rawEntries, NSArray<NSString*>** invalidItems);
-static NSString* routeKeyForEntry(NSDictionary* entry);
-static NSArray<NSDictionary*>* storeEntries(void);
-static BOOL replaceStoreEntries(NSArray<NSDictionary*>* entries);
-static NSDictionary* addEntriesToStore(NSArray<NSDictionary*>* entries);
-static NSDictionary* removeEntriesFromStore(NSArray<NSDictionary*>* entries);
-static NSDictionary* clearStoreEntries(void);
 static NSArray<NSDictionary*>* activeIPv4TakeoverRouteEntries(void);
 static void updateRouteBackupTakeoverRoutes(NSMutableDictionary* backup);
 static NSDictionary* tunStatusPayload(void);
 static NSDictionary* routeListPayload(void);
-static NSDictionary* sendRequestToControlServer(NSDictionary* request, NSString** errorMessage);
 static NSDictionary* requestActiveSession(NSDictionary* request);
 static NSString* currentSessionState(void);
-static NSString* currentSessionType(void);
-static NSString* currentSessionOwner(void);
-static NSString* currentControlPlane(void);
 static BOOL isExternalFDSession(void);
-static BOOL canTreatSessionAsActiveResponse(NSDictionary* response);
 static BOOL applyWhitelistEntries(NSArray<NSDictionary*>* entries, NSMutableArray* appliedEntries, NSMutableArray* failedEntries);
 static BOOL removeWhitelistEntries(NSArray<NSDictionary*>* entries, NSMutableArray* removedEntries, NSMutableArray* failedEntries);
 static NSDictionary* syncActiveWhitelistWithEntries(NSArray<NSDictionary*>* entries, BOOL replaceExisting);
@@ -158,8 +82,6 @@ static NSDictionary* deactivateExternalTunSession(NSString* expectedTunName);
 static BOOL installIPv4TakeoverRoutes(NSString* tunName, NSMutableDictionary* backup, NSString** errorMessage);
 static BOOL removeIPv4TakeoverRoutes(NSString* tunName, NSString** errorMessage);
 static BOOL loadDefaultRouteBaseline(NSString** errorMessage);
-static BOOL startControlSocketServer(NSString** errorMessage);
-static void controlSocketAcceptLoop(void);
 static NSDictionary* processServerRequest(NSDictionary* request);
 static void syncRuntimeSessionFromBackup(void);
 static void syncRuntimeRouteBaselineFromBackup(void);
@@ -170,56 +92,16 @@ static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state,
 static void hydrateBaselineRuntimeFromBackup(NSMutableDictionary* backup);
 static NSDictionary* preferredNonTunDefaultRoute(void);
 static void updateRouteBackupRoutes(NSMutableDictionary* backup);
-static NSArray<NSString*>* ipLiteralAddressesFromPath(NSString* path);
 static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments);
 static NSDictionary* handleRouteCommand(NSArray<NSString*>* arguments);
 static void cleanupHandle(int signal_ns);
-
-static NSString* appSupportPath(void) {
-    NSString* override = [[[NSProcessInfo processInfo] environment] objectForKey:@"V2RAYXS_APP_SUPPORT_PATH"];
-    if (override.length > 0) {
-        return override;
-    }
-    return [NSString stringWithFormat:@"%@/%@", NSHomeDirectory(), V2RayXSAppSupportRelativePath];
-}
-
-static NSURL* appSupportFileURL(NSString* filename) {
-    if (filename.length == 0) {
-        return nil;
-    }
-    return [NSURL fileURLWithPath:[NSString stringWithFormat:@"%@/%@", appSupportPath(), filename]];
-}
-
-static BOOL ensureAppSupportDirectory(void) {
-    NSError* error = nil;
-    if ([[NSFileManager defaultManager] createDirectoryAtPath:appSupportPath() withIntermediateDirectories:YES attributes:nil error:&error]) {
-        return YES;
-    }
-    return error == nil;
-}
-
-static NSURL* routeBackupFileURL(void) {
-    return appSupportFileURL(SystemRouteBackupFilename);
-}
-
-static NSURL* routeStoreFileURL(void) {
-    return appSupportFileURL(RouteWhitelistStoreFilename);
-}
-
-static NSString* controlSocketPath(void) {
-    return [[appSupportFileURL(TunControlSocketFilename) path] copy];
-}
-
-static NSString* tunSessionLockPath(void) {
-    return [[appSupportFileURL(TunSessionLockFilename) path] copy];
-}
 
 static BOOL acquireTunSessionLock(NSString** errorMessage) {
     if (tunSessionLockFD != -1) {
         return YES;
     }
-    ensureAppSupportDirectory();
-    NSString* lockPath = tunSessionLockPath();
+    helperEnsureAppSupportDirectory();
+    NSString* lockPath = helperTunSessionLockPath();
     const char* lockPathFS = [lockPath fileSystemRepresentation];
     for (NSInteger attempt = 0; attempt < 2; attempt++) {
         int fd = open(lockPathFS, O_CREAT | O_EXCL | O_RDWR, 0600);
@@ -258,7 +140,7 @@ static void releaseTunSessionLock(void) {
     if (tunSessionLockFD == -1) {
         return;
     }
-    NSString* lockPath = tunSessionLockPath();
+    NSString* lockPath = helperTunSessionLockPath();
     unlink([lockPath fileSystemRepresentation]);
     close(tunSessionLockFD);
     tunSessionLockFD = -1;
@@ -291,6 +173,21 @@ static BOOL shouldOutputJSON(NSArray<NSString*>* arguments) {
     return [arguments containsObject:@"--json"];
 }
 
+static BOOL shouldEnableDebugLogging(NSArray<NSString*>* arguments) {
+    return [arguments containsObject:@"--debug"];
+}
+
+static void debugLog(NSString* format, ...) {
+    if (!debugLoggingEnabled) {
+        return;
+    }
+    va_list args;
+    va_start(args, format);
+    NSString* message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    fprintf(stderr, "[debug] %s\n", [message UTF8String]);
+}
+
 static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments) {
     NSTask* task = [[NSTask alloc] init];
     task.launchPath = launchPath;
@@ -308,507 +205,6 @@ static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments
         @"stdout": [[NSString alloc] initWithData:stdoutData encoding:NSUTF8StringEncoding] ?: @"",
         @"stderr": [[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] ?: @"",
     };
-}
-
-static BOOL runNetworksetup(NSArray<NSString*>* arguments) {
-    return [runTool(@"/usr/sbin/networksetup", arguments)[@"status"] intValue] == 0;
-}
-
-static BOOL setProxyFlag(NSMutableDictionary* proxies, NSString* key, BOOL enabled) {
-    if (proxies == nil || key == nil) {
-        return NO;
-    }
-    proxies[key] = @(enabled ? 1 : 0);
-    return YES;
-}
-
-static void disableManualProxySettings(NSMutableDictionary* proxies) {
-    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesHTTPEnable, NO);
-    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesHTTPSEnable, NO);
-    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesProxyAutoConfigEnable, NO);
-    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesProxyAutoDiscoveryEnable, NO);
-    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesSOCKSEnable, NO);
-    proxies[(NSString *)kCFNetworkProxiesProxyAutoConfigURLString] = @"";
-}
-
-static BOOL saveProxyBackup(NSDictionary* sets) {
-    if (sets == nil) {
-        return NO;
-    }
-    ensureAppSupportDirectory();
-    return [sets writeToURL:appSupportFileURL(SystemProxyBackupFilename) atomically:NO];
-}
-
-static NSDictionary* loadProxyBackup(void) {
-    return [NSDictionary dictionaryWithContentsOfURL:appSupportFileURL(SystemProxyBackupFilename)];
-}
-
-static BOOL isConfigurableProxyService(NSDictionary* service) {
-    if (![service isKindOfClass:[NSDictionary class]]) {
-        return NO;
-    }
-    NSDictionary* proxies = service[@"Proxies"];
-    if (![proxies isKindOfClass:[NSDictionary class]]) {
-        return NO;
-    }
-    NSString* serviceUserDefinedName = service[@"UserDefinedName"];
-    return ![serviceUserDefinedName isEqualToString:@"V2RayXS"] && ![serviceUserDefinedName isEqualToString:@"V2RayX"];
-}
-
-static BOOL parseProxyPorts(const char* socksArg, const char* httpArg, int* localPort, int* httpPort) {
-    int parsedLocalPort = 0;
-    int parsedHttpPort = 0;
-    if (sscanf(socksArg, "%i", &parsedLocalPort) != 1 || parsedLocalPort > 65535 || parsedLocalPort < 0) {
-        return NO;
-    }
-    if (sscanf(httpArg, "%i", &parsedHttpPort) != 1 || parsedHttpPort > 65535 || parsedHttpPort < 0) {
-        return NO;
-    }
-    if (localPort != NULL) {
-        *localPort = parsedLocalPort;
-    }
-    if (httpPort != NULL) {
-        *httpPort = parsedHttpPort;
-    }
-    return YES;
-}
-
-static void applyAutoProxySettings(NSMutableDictionary* proxies) {
-    proxies[(NSString *)kCFNetworkProxiesProxyAutoConfigURLString] = @"http://127.0.0.1:8070/proxy.pac";
-    setProxyFlag(proxies, (NSString *)kCFNetworkProxiesProxyAutoConfigEnable, YES);
-}
-
-static void applyGlobalProxySettings(NSMutableDictionary* proxies, int localPort, int httpPort) {
-    if (localPort > 0) {
-        proxies[(NSString *)kCFNetworkProxiesSOCKSProxy] = @"127.0.0.1";
-        proxies[(NSString*)kCFNetworkProxiesSOCKSPort] = @(localPort);
-        setProxyFlag(proxies, (NSString*)kCFNetworkProxiesSOCKSEnable, YES);
-    }
-    if (httpPort > 0) {
-        proxies[(NSString *)kCFNetworkProxiesHTTPProxy] = @"127.0.0.1";
-        proxies[(NSString *)kCFNetworkProxiesHTTPSProxy] = @"127.0.0.1";
-        proxies[(NSString*)kCFNetworkProxiesHTTPPort] = @(httpPort);
-        proxies[(NSString*)kCFNetworkProxiesHTTPSPort] = @(httpPort);
-        setProxyFlag(proxies, (NSString*)kCFNetworkProxiesHTTPEnable, YES);
-        setProxyFlag(proxies, (NSString*)kCFNetworkProxiesHTTPSEnable, YES);
-    }
-}
-
-static void cleanupInactiveProxySettings(NSMutableDictionary* proxies, NSString* mode) {
-    if (![mode isEqualToString:@"auto"]) {
-        proxies[(NSString *)kCFNetworkProxiesProxyAutoConfigURLString] = @"";
-    }
-    if (![mode isEqualToString:@"global"]) {
-        proxies[(NSString *)kCFNetworkProxiesSOCKSProxy] = @"";
-        proxies[(NSString *)kCFNetworkProxiesSOCKSPort] = @0;
-        proxies[(NSString *)kCFNetworkProxiesHTTPProxy] = @"";
-        proxies[(NSString *)kCFNetworkProxiesHTTPSProxy] = @"";
-        proxies[(NSString *)kCFNetworkProxiesHTTPPort] = @0;
-        proxies[(NSString *)kCFNetworkProxiesHTTPSPort] = @0;
-    }
-}
-
-static NSMutableDictionary* proxiesForMode(NSString* mode, NSDictionary* service, NSString* serviceID, NSDictionary* originalSets, int localPort, int httpPort) {
-    NSMutableDictionary* proxies = [service[@"Proxies"] mutableCopy] ?: [[NSMutableDictionary alloc] init];
-    disableManualProxySettings(proxies);
-    if ([mode isEqualToString:@"restore"]) {
-        NSDictionary* originalProxySettings = originalSets[serviceID][@"Proxies"];
-        return originalProxySettings != nil ? [originalProxySettings mutableCopy] : proxies;
-    }
-    if ([mode isEqualToString:@"auto"]) {
-        applyAutoProxySettings(proxies);
-    } else if ([mode isEqualToString:@"global"]) {
-        applyGlobalProxySettings(proxies, localPort, httpPort);
-    }
-    cleanupInactiveProxySettings(proxies, mode);
-    return proxies;
-}
-
-static BOOL applyProxyModeToServices(SCPreferencesRef prefRef, NSDictionary* sets, NSString* mode, NSDictionary* originalSets, int localPort, int httpPort) {
-    SCNetworkSetRef currentSet = SCNetworkSetCopyCurrent(prefRef);
-    if (currentSet == NULL) {
-        return NO;
-    }
-    NSArray* services = CFBridgingRelease(SCNetworkSetCopyServices(currentSet));
-    CFRelease(currentSet);
-    BOOL didApply = NO;
-    for (id serviceObject in services) {
-        SCNetworkServiceRef serviceRef = (__bridge SCNetworkServiceRef)serviceObject;
-        if (serviceRef == NULL || !SCNetworkServiceGetEnabled(serviceRef)) {
-            continue;
-        }
-        NSString* serviceID = (__bridge NSString*)SCNetworkServiceGetServiceID(serviceRef);
-        NSDictionary* service = sets[serviceID];
-        if (!isConfigurableProxyService(service)) {
-            continue;
-        }
-        SCNetworkProtocolRef proxyProtocol = SCNetworkServiceCopyProtocol(serviceRef, kSCNetworkProtocolTypeProxies);
-        if (proxyProtocol == NULL) {
-            continue;
-        }
-        NSMutableDictionary* proxies = proxiesForMode(mode, service, serviceID, originalSets, localPort, httpPort);
-        Boolean ok = SCNetworkProtocolSetConfiguration(proxyProtocol, (__bridge CFDictionaryRef)proxies);
-        CFRelease(proxyProtocol);
-        if (!ok) {
-            return NO;
-        }
-        didApply = YES;
-    }
-    return didApply;
-}
-
-static BOOL createAuthorizedPreferences(SCPreferencesRef* prefRefOut) {
-    if (prefRefOut == NULL) {
-        return NO;
-    }
-    *prefRefOut = NULL;
-    if (geteuid() == 0) {
-        SCPreferencesRef prefRef = SCPreferencesCreate(NULL, CFSTR("V2RayXS"), NULL);
-        if (prefRef == NULL) {
-            return NO;
-        }
-        *prefRefOut = prefRef;
-        return YES;
-    }
-    AuthorizationRef authRef = NULL;
-    AuthorizationFlags authFlags = kAuthorizationFlagDefaults | kAuthorizationFlagExtendRights | kAuthorizationFlagInteractionAllowed | kAuthorizationFlagPreAuthorize;
-    OSStatus authErr = AuthorizationCreate(nil, kAuthorizationEmptyEnvironment, authFlags, &authRef);
-    if (authErr != noErr || authRef == NULL) {
-        return NO;
-    }
-    SCPreferencesRef prefRef = SCPreferencesCreateWithAuthorization(nil, CFSTR("V2RayXS"), nil, authRef);
-    if (prefRef == NULL) {
-        return NO;
-    }
-    *prefRefOut = prefRef;
-    return YES;
-}
-
-static BOOL configureNetworksetupProxyForService(NSString* serviceName, NSString* mode, int localPort, int httpPort) {
-    if (serviceName.length == 0) {
-        return NO;
-    }
-    BOOL ok = YES;
-    ok = runNetworksetup(@[@"-setautoproxystate", serviceName, @"off"]) && ok;
-    ok = runNetworksetup(@[@"-setwebproxystate", serviceName, @"off"]) && ok;
-    ok = runNetworksetup(@[@"-setsecurewebproxystate", serviceName, @"off"]) && ok;
-    ok = runNetworksetup(@[@"-setsocksfirewallproxystate", serviceName, @"off"]) && ok;
-    if ([mode isEqualToString:@"auto"]) {
-        ok = runNetworksetup(@[@"-setautoproxyurl", serviceName, @"http://127.0.0.1:8070/proxy.pac"]) && ok;
-        ok = runNetworksetup(@[@"-setautoproxystate", serviceName, @"on"]) && ok;
-        return ok;
-    }
-    if ([mode isEqualToString:@"global"]) {
-        if (httpPort > 0) {
-            NSString* httpPortString = [NSString stringWithFormat:@"%d", httpPort];
-            ok = runNetworksetup(@[@"-setwebproxy", serviceName, @"127.0.0.1", httpPortString]) && ok;
-            ok = runNetworksetup(@[@"-setsecurewebproxy", serviceName, @"127.0.0.1", httpPortString]) && ok;
-            ok = runNetworksetup(@[@"-setwebproxystate", serviceName, @"on"]) && ok;
-            ok = runNetworksetup(@[@"-setsecurewebproxystate", serviceName, @"on"]) && ok;
-        }
-        if (localPort > 0) {
-            NSString* localPortString = [NSString stringWithFormat:@"%d", localPort];
-            ok = runNetworksetup(@[@"-setsocksfirewallproxy", serviceName, @"127.0.0.1", localPortString]) && ok;
-            ok = runNetworksetup(@[@"-setsocksfirewallproxystate", serviceName, @"on"]) && ok;
-        }
-    }
-    return ok;
-}
-
-static BOOL applyDynamicProxyState(NSString* mode, int localPort, int httpPort) {
-    SCPreferencesRef prefRef = SCPreferencesCreate(NULL, CFSTR("V2RayXS"), NULL);
-    if (prefRef == NULL) {
-        return NO;
-    }
-    SCNetworkSetRef currentSet = SCNetworkSetCopyCurrent(prefRef);
-    if (currentSet == NULL) {
-        CFRelease(prefRef);
-        return NO;
-    }
-    NSArray* services = CFBridgingRelease(SCNetworkSetCopyServices(currentSet));
-    CFRelease(currentSet);
-    CFRelease(prefRef);
-    BOOL didApply = NO;
-    BOOL ok = YES;
-    for (id serviceObject in services) {
-        SCNetworkServiceRef serviceRef = (__bridge SCNetworkServiceRef)serviceObject;
-        if (serviceRef == NULL || !SCNetworkServiceGetEnabled(serviceRef)) {
-            continue;
-        }
-        NSString* serviceName = (__bridge NSString*)SCNetworkServiceGetName(serviceRef);
-        if (serviceName.length == 0) {
-            continue;
-        }
-        didApply = YES;
-        ok = configureNetworksetupProxyForService(serviceName, mode, localPort, httpPort) && ok;
-    }
-    return didApply && ok;
-}
-
-static BOOL runProxySaveMode(void) {
-    SCPreferencesRef prefRef = NULL;
-    if (!createAuthorizedPreferences(&prefRef)) {
-        return NO;
-    }
-    NSDictionary *sets = (__bridge NSDictionary *)SCPreferencesGetValue(prefRef, kSCPrefNetworkServices);
-    BOOL ok = saveProxyBackup(sets);
-    CFRelease(prefRef);
-    return ok;
-}
-
-static BOOL applySystemProxyMode(NSString* mode, NSDictionary* originalSets, int localPort, int httpPort) {
-    SCPreferencesRef prefRef = NULL;
-    if (!createAuthorizedPreferences(&prefRef)) {
-        return NO;
-    }
-    if (!SCPreferencesLock(prefRef, YES)) {
-        CFRelease(prefRef);
-        return NO;
-    }
-    NSDictionary* sets = (__bridge NSDictionary*)SCPreferencesGetValue(prefRef, kSCPrefNetworkServices);
-    if (sets == nil || !applyProxyModeToServices(prefRef, sets, mode, originalSets, localPort, httpPort)) {
-        SCPreferencesUnlock(prefRef);
-        CFRelease(prefRef);
-        return NO;
-    }
-    BOOL ok = SCPreferencesCommitChanges(prefRef) && SCPreferencesApplyChanges(prefRef);
-    SCPreferencesSynchronize(prefRef);
-    SCPreferencesUnlock(prefRef);
-    CFRelease(prefRef);
-    if (!ok) {
-        return NO;
-    }
-    if (![mode isEqualToString:@"restore"]) {
-        return applyDynamicProxyState(mode, localPort, httpPort);
-    }
-    return YES;
-}
-
-static NSMutableDictionary* loadRouteBackup(void) {
-    NSMutableDictionary* backup = [NSMutableDictionary dictionaryWithContentsOfURL:routeBackupFileURL()] ?: [[NSMutableDictionary alloc] init];
-    backup = sanitizeLegacyRouteBackup(backup);
-    backup[ROUTE_BACKUP_VERSION_KEY] = @2;
-    if (backup[ROUTE_BACKUP_STATE_KEY] == nil) {
-        backup[ROUTE_BACKUP_STATE_KEY] = ROUTE_BACKUP_STATE_IDLE;
-    }
-    if (backup[ROUTE_BACKUP_TUN_NAME_KEY] == nil) {
-        backup[ROUTE_BACKUP_TUN_NAME_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V6_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V4_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] == nil) {
-        backup[ROUTE_BACKUP_DEFAULT_INTERFACE_V6_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_WHITELIST_ROUTES_KEY] == nil) {
-        backup[ROUTE_BACKUP_WHITELIST_ROUTES_KEY] = @[];
-    }
-    if (backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] == nil) {
-        backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] = @[];
-    }
-    if (backup[ROUTE_BACKUP_LAST_ERROR_KEY] == nil) {
-        backup[ROUTE_BACKUP_LAST_ERROR_KEY] = @"";
-    }
-    if (backup[ROUTE_BACKUP_SESSION_TYPE_KEY] == nil) {
-        backup[ROUTE_BACKUP_SESSION_TYPE_KEY] = SESSION_TYPE_NONE;
-    }
-    if (backup[ROUTE_BACKUP_SESSION_OWNER_KEY] == nil) {
-        backup[ROUTE_BACKUP_SESSION_OWNER_KEY] = SESSION_OWNER_NONE;
-    }
-    if (backup[ROUTE_BACKUP_CONTROL_PLANE_KEY] == nil) {
-        backup[ROUTE_BACKUP_CONTROL_PLANE_KEY] = CONTROL_PLANE_NONE;
-    }
-    return backup;
-}
-
-static BOOL saveRouteBackup(NSMutableDictionary* backup) {
-    ensureAppSupportDirectory();
-    backup = sanitizeLegacyRouteBackup(backup);
-    return [backup writeToURL:routeBackupFileURL() atomically:NO];
-}
-
-static NSMutableDictionary* sanitizeLegacyRouteBackup(NSMutableDictionary* backup) {
-    if (backup == nil) {
-        return [[NSMutableDictionary alloc] init];
-    }
-
-    id legacyDefaultGateway = backup[@"DefaultRouteGateway"];
-    if (![backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] isKindOfClass:[NSString class]] || [backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] length] == 0) {
-        if ([legacyDefaultGateway isKindOfClass:[NSString class]] && [legacyDefaultGateway length] > 0) {
-            backup[ROUTE_BACKUP_DEFAULT_GATEWAY_V4_KEY] = legacyDefaultGateway;
-        }
-    }
-
-    NSArray<NSString*>* legacyKeys = @[@"DefaultRouteGateway", @"DefaultRouteSwitched"];
-    for (NSString* key in legacyKeys) {
-        [backup removeObjectForKey:key];
-    }
-
-    return backup;
-}
-
-static NSMutableDictionary* loadRouteStore(void) {
-    NSMutableDictionary* store = [NSMutableDictionary dictionaryWithContentsOfURL:routeStoreFileURL()] ?: [[NSMutableDictionary alloc] init];
-    store[ROUTE_STORE_VERSION_KEY] = @1;
-    if (store[ROUTE_STORE_ENTRIES_KEY] == nil) {
-        store[ROUTE_STORE_ENTRIES_KEY] = @[];
-    }
-    return store;
-}
-
-static BOOL saveRouteStore(NSDictionary* store) {
-    ensureAppSupportDirectory();
-    return [store writeToURL:routeStoreFileURL() atomically:NO];
-}
-
-static NSString* familyStringForFamily(SYSRouteAddressFamily family) {
-    return family == SYSRouteAddressFamilyIPv6 ? @"ipv6" : @"ipv4";
-}
-
-static SYSRouteAddressFamily familyFromString(NSString* familyString) {
-    return [familyString isEqualToString:@"ipv6"] ? SYSRouteAddressFamilyIPv6 : SYSRouteAddressFamilyIPv4;
-}
-
-static NSString* normalizedIPAddressString(NSString* ipAddress, SYSRouteAddressFamily family) {
-    if (ipAddress.length == 0) {
-        return nil;
-    }
-    char buffer[INET6_ADDRSTRLEN] = {0};
-    if (family == SYSRouteAddressFamilyIPv4) {
-        struct in_addr ipv4Addr;
-        if (inet_pton(AF_INET, [ipAddress UTF8String], &ipv4Addr) != 1) {
-            return nil;
-        }
-        if (inet_ntop(AF_INET, &ipv4Addr, buffer, sizeof(buffer)) == NULL) {
-            return nil;
-        }
-    } else {
-        struct in6_addr ipv6Addr;
-        if (inet_pton(AF_INET6, [ipAddress UTF8String], &ipv6Addr) != 1) {
-            return nil;
-        }
-        if (inet_ntop(AF_INET6, &ipv6Addr, buffer, sizeof(buffer)) == NULL) {
-            return nil;
-        }
-    }
-    return [NSString stringWithUTF8String:buffer];
-}
-
-static NSArray<NSDictionary*>* normalizedEntriesFromArray(NSArray* rawEntries, NSArray<NSString*>** invalidItems) {
-    NSMutableArray<NSDictionary*>* entries = [[NSMutableArray alloc] init];
-    NSMutableArray<NSString*>* invalid = [[NSMutableArray alloc] init];
-    NSMutableSet<NSString*>* seenKeys = [[NSMutableSet alloc] init];
-    for (id item in rawEntries) {
-        NSString* ipAddress = nil;
-        NSString* familyString = nil;
-        if ([item isKindOfClass:[NSString class]]) {
-            ipAddress = item;
-        } else if ([item isKindOfClass:[NSDictionary class]]) {
-            ipAddress = item[ENTRY_IP_KEY];
-            familyString = item[ENTRY_FAMILY_KEY];
-        }
-        SYSRouteAddressFamily family = SYSRouteAddressFamilyIPv4;
-        if (familyString.length > 0) {
-            family = familyFromString(familyString);
-        } else {
-            SYSRouteAddressFamily detectedFamily = SYSRouteAddressFamilyIPv4;
-            if (![routeHelper isValidIPAddress:ipAddress family:&detectedFamily]) {
-                [invalid addObject:(ipAddress ?: @"<invalid>")];
-                continue;
-            }
-            family = detectedFamily;
-        }
-        NSString* normalizedIP = normalizedIPAddressString(ipAddress, family);
-        if (normalizedIP.length == 0) {
-            [invalid addObject:(ipAddress ?: @"<invalid>")];
-            continue;
-        }
-        NSDictionary* entry = @{
-            ENTRY_IP_KEY: normalizedIP,
-            ENTRY_FAMILY_KEY: familyStringForFamily(family),
-            ENTRY_ENABLED_KEY: @YES,
-        };
-        NSString* key = routeKeyForEntry(entry);
-        if ([seenKeys containsObject:key]) {
-            continue;
-        }
-        [seenKeys addObject:key];
-        [entries addObject:entry];
-    }
-    if (invalidItems != NULL) {
-        *invalidItems = invalid;
-    }
-    return entries;
-}
-
-static NSString* routeKeyForEntry(NSDictionary* entry) {
-    return [NSString stringWithFormat:@"%@:%@", entry[ENTRY_FAMILY_KEY] ?: @"ipv4", entry[ENTRY_IP_KEY] ?: @""];
-}
-
-static NSArray<NSDictionary*>* storeEntries(void) {
-    return [loadRouteStore()[ROUTE_STORE_ENTRIES_KEY] copy] ?: @[];
-}
-
-static BOOL replaceStoreEntries(NSArray<NSDictionary*>* entries) {
-    NSMutableDictionary* store = loadRouteStore();
-    store[ROUTE_STORE_ENTRIES_KEY] = entries ?: @[];
-    return saveRouteStore(store);
-}
-
-static NSDictionary* addEntriesToStore(NSArray<NSDictionary*>* entries) {
-    NSMutableArray<NSDictionary*>* mergedEntries = [[storeEntries() mutableCopy] ?: [NSMutableArray array] mutableCopy];
-    NSMutableSet<NSString*>* existingKeys = [[NSMutableSet alloc] init];
-    for (NSDictionary* entry in mergedEntries) {
-        [existingKeys addObject:routeKeyForEntry(entry)];
-    }
-    NSMutableArray* added = [[NSMutableArray alloc] init];
-    for (NSDictionary* entry in entries) {
-        NSString* key = routeKeyForEntry(entry);
-        if ([existingKeys containsObject:key]) {
-            continue;
-        }
-        [existingKeys addObject:key];
-        [mergedEntries addObject:entry];
-        [added addObject:entry];
-    }
-    if (!replaceStoreEntries(mergedEntries)) {
-        return makeResponse(NO, @"Failed to update route whitelist store.", nil);
-    }
-    return makeResponse(YES, @"Routes added to whitelist store.", @{@"persisted": added, @"entries": mergedEntries});
-}
-
-static NSDictionary* removeEntriesFromStore(NSArray<NSDictionary*>* entries) {
-    NSMutableSet<NSString*>* keysToRemove = [[NSMutableSet alloc] init];
-    for (NSDictionary* entry in entries) {
-        [keysToRemove addObject:routeKeyForEntry(entry)];
-    }
-    NSMutableArray<NSDictionary*>* updatedEntries = [[NSMutableArray alloc] init];
-    NSMutableArray<NSDictionary*>* removed = [[NSMutableArray alloc] init];
-    for (NSDictionary* entry in storeEntries()) {
-        if ([keysToRemove containsObject:routeKeyForEntry(entry)]) {
-            [removed addObject:entry];
-        } else {
-            [updatedEntries addObject:entry];
-        }
-    }
-    if (!replaceStoreEntries(updatedEntries)) {
-        return makeResponse(NO, @"Failed to update route whitelist store.", nil);
-    }
-    return makeResponse(YES, @"Routes removed from whitelist store.", @{@"removed": removed, @"entries": updatedEntries});
-}
-
-static NSDictionary* clearStoreEntries(void) {
-    NSArray<NSDictionary*>* previousEntries = storeEntries();
-    if (!replaceStoreEntries(@[])) {
-        return makeResponse(NO, @"Failed to clear route whitelist store.", nil);
-    }
-    return makeResponse(YES, @"Route whitelist store cleared.", @{@"removed": previousEntries});
 }
 
 static NSArray<NSDictionary*>* activeIPv4TakeoverRouteEntries(void) {
@@ -829,7 +225,7 @@ static void updateRouteBackupTakeoverRoutes(NSMutableDictionary* backup) {
 static NSDictionary* tunStatusPayload(void) {
     NSMutableDictionary* backup = loadRouteBackup();
     NSArray* persistedEntries = storeEntries();
-    BOOL socketAvailable = access([controlSocketPath() fileSystemRepresentation], F_OK) == 0;
+    BOOL socketAvailable = access([helperControlSocketPath() fileSystemRepresentation], F_OK) == 0;
     NSUInteger appliedCount = activeWhitelistRoutes != nil ? [activeWhitelistRoutes count] : [backup[ROUTE_BACKUP_WHITELIST_ROUTES_KEY] count];
     NSString* state = currentSessionState();
     NSString* tunName = activeTunName.length > 0 ? activeTunName : (backup[ROUTE_BACKUP_TUN_NAME_KEY] ?: @"");
@@ -930,7 +326,7 @@ static BOOL applyWhitelistEntries(NSArray<NSDictionary*>* entries, NSMutableArra
         return YES;
     }
     for (NSDictionary* entry in entries) {
-        SYSRouteAddressFamily family = familyFromString(entry[ENTRY_FAMILY_KEY]);
+        SYSRouteAddressFamily family = routeEntryFamilyFromString(entry[ENTRY_FAMILY_KEY]);
         NSString* gateway = family == SYSRouteAddressFamilyIPv6 ? defaultRouteGatewayV6 : defaultRouteGatewayV4;
         NSString* routeInterface = family == SYSRouteAddressFamilyIPv6 ? defaultRouteInterfaceV6 : defaultRouteInterfaceV4;
         if (family == SYSRouteAddressFamilyIPv6 && routeInterface.length == 0 && defaultRouteInterfaceV4.length > 0) {
@@ -973,7 +369,7 @@ static BOOL removeWhitelistEntries(NSArray<NSDictionary*>* entries, NSMutableArr
         if (activeEntry == nil) {
             continue;
         }
-        SYSRouteAddressFamily family = familyFromString(activeEntry[ENTRY_FAMILY_KEY]);
+        SYSRouteAddressFamily family = routeEntryFamilyFromString(activeEntry[ENTRY_FAMILY_KEY]);
         NSString* gateway = activeEntry[ENTRY_GATEWAY_KEY];
         NSString* routeInterface = activeEntry[ENTRY_INTERFACE_KEY];
         BOOL deleted = NO;
@@ -1044,7 +440,7 @@ static NSDictionary* stopTunSession(void) {
         close(controlServerSocketFD);
         controlServerSocketFD = -1;
     }
-    unlink([controlSocketPath() fileSystemRepresentation]);
+    unlink([helperControlSocketPath() fileSystemRepresentation]);
     activeTunName = @"";
     runLoopMark = NO;
     releaseTunSessionLock();
@@ -1065,9 +461,11 @@ static NSDictionary* allocateTunFDSession(NSString* tunName, int sendSocketFD) {
         return makeResponse(NO, @"Missing tun fd transport socket fd.", nil);
     }
 
+    debugLog(@"allocating tun fd preferredName=%@ sendSocketFD=%d", tunName ?: @"", sendSocketFD);
     NSString* actualTunName = nil;
     int tunFD = createTUNWithName(tunName, &actualTunName);
     if (tunFD < 0) {
+        debugLog(@"createTUNWithName failed errno=%d", -tunFD);
         return makeResponse(NO, [NSString stringWithFormat:@"Failed to create tun interface (errno=%d).", -tunFD], nil);
     }
     if (actualTunName.length == 0 && tunName.length > 0) {
@@ -1076,6 +474,7 @@ static NSDictionary* allocateTunFDSession(NSString* tunName, int sendSocketFD) {
 
     NSString* setupError = nil;
     if (!ensureTUNInterfaceReady(actualTunName, 1500, &setupError)) {
+        debugLog(@"ensureTUNInterfaceReady failed tunName=%@ error=%@", actualTunName ?: @"", setupError ?: @"");
         close(tunFD);
         return makeResponse(NO, setupError ?: @"Failed to configure tun interface.", nil);
     }
@@ -1086,9 +485,12 @@ static NSDictionary* allocateTunFDSession(NSString* tunName, int sendSocketFD) {
     NSData* payloadData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
     NSString* payloadString = [[NSString alloc] initWithData:payloadData encoding:NSUTF8StringEncoding] ?: @"{}";
     if (!sendFileDescriptor(sendSocketFD, tunFD, payloadString)) {
+        debugLog(@"sendFileDescriptor failed sendSocketFD=%d tunFD=%d payload=%@ errno=%d", sendSocketFD, tunFD, payloadString, errno);
         close(tunFD);
         return makeResponse(NO, @"Failed to send tun fd to caller.", nil);
     }
+
+    debugLog(@"allocated tun fd actualName=%@ tunFD=%d", actualTunName ?: @"", tunFD);
 
     close(tunFD);
     return makeResponse(YES, @"Tun fd prepared.", @{@"tunName": actualTunName ?: @""});
@@ -1100,40 +502,6 @@ static NSDictionary* deactivateExternalTunSession(NSString* expectedTunName) {
         return makeResponse(NO, @"Requested tun name does not match active external tun session.", nil);
     }
     return stopTunSession();
-}
-
-static BOOL startControlSocketServer(NSString** errorMessage) {
-    ensureAppSupportDirectory();
-    NSString* socketPath = controlSocketPath();
-    unlink([socketPath fileSystemRepresentation]);
-    int serverFD = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (serverFD == -1) {
-        if (errorMessage != NULL) {
-            *errorMessage = @"Failed to create control socket.";
-        }
-        return NO;
-    }
-    struct sockaddr_un address;
-    memset(&address, 0, sizeof(address));
-    address.sun_family = AF_UNIX;
-    strncpy(address.sun_path, [socketPath fileSystemRepresentation], sizeof(address.sun_path) - 1);
-    if (bind(serverFD, (struct sockaddr*)&address, sizeof(address)) != 0) {
-        close(serverFD);
-        if (errorMessage != NULL) {
-            *errorMessage = @"Failed to bind control socket.";
-        }
-        return NO;
-    }
-    chmod([socketPath fileSystemRepresentation], 0600);
-    if (listen(serverFD, 8) != 0) {
-        close(serverFD);
-        if (errorMessage != NULL) {
-            *errorMessage = @"Failed to listen on control socket.";
-        }
-        return NO;
-    }
-    controlServerSocketFD = serverFD;
-    return YES;
 }
 
 static NSDictionary* processServerRequest(NSDictionary* request) {
@@ -1173,74 +541,6 @@ static NSDictionary* processServerRequest(NSDictionary* request) {
     return makeResponse(NO, @"Unknown server command.", nil);
 }
 
-static void controlSocketAcceptLoop(void) {
-    while (runLoopMark && controlServerSocketFD != -1) {
-        int clientFD = accept(controlServerSocketFD, NULL, NULL);
-        if (clientFD == -1) {
-            continue;
-        }
-        NSMutableData* inputData = [[NSMutableData alloc] init];
-        uint8_t buffer[4096];
-        ssize_t bytesRead = 0;
-        while ((bytesRead = read(clientFD, buffer, sizeof(buffer))) > 0) {
-            [inputData appendBytes:buffer length:(NSUInteger)bytesRead];
-        }
-        NSDictionary* request = nil;
-        if (inputData.length > 0) {
-            request = [NSJSONSerialization JSONObjectWithData:inputData options:0 error:nil];
-        }
-        NSDictionary* response = processServerRequest(request ?: @{});
-        NSData* responseData = [NSJSONSerialization dataWithJSONObject:response options:0 error:nil];
-        if (responseData != nil) {
-            write(clientFD, [responseData bytes], [responseData length]);
-        }
-        close(clientFD);
-    }
-}
-
-static NSDictionary* sendRequestToControlServer(NSDictionary* request, NSString** errorMessage) {
-    int clientFD = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (clientFD == -1) {
-        if (errorMessage != NULL) {
-            *errorMessage = @"Failed to create client socket.";
-        }
-        return nil;
-    }
-    struct sockaddr_un address;
-    memset(&address, 0, sizeof(address));
-    address.sun_family = AF_UNIX;
-    NSString* socketPath = controlSocketPath();
-    strncpy(address.sun_path, [socketPath fileSystemRepresentation], sizeof(address.sun_path) - 1);
-    if (connect(clientFD, (struct sockaddr*)&address, sizeof(address)) != 0) {
-        close(clientFD);
-        if (errorMessage != NULL) {
-            *errorMessage = @"No active tun session.";
-        }
-        return nil;
-    }
-    NSData* requestData = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
-    if (requestData == nil || write(clientFD, [requestData bytes], [requestData length]) < 0) {
-        close(clientFD);
-        if (errorMessage != NULL) {
-            *errorMessage = @"Failed to send request to tun session.";
-        }
-        return nil;
-    }
-    shutdown(clientFD, SHUT_WR);
-    NSMutableData* responseData = [[NSMutableData alloc] init];
-    uint8_t buffer[4096];
-    ssize_t bytesRead = 0;
-    while ((bytesRead = read(clientFD, buffer, sizeof(buffer))) > 0) {
-        [responseData appendBytes:buffer length:(NSUInteger)bytesRead];
-    }
-    close(clientFD);
-    NSDictionary* response = responseData.length > 0 ? [NSJSONSerialization JSONObjectWithData:responseData options:0 error:nil] : nil;
-    if (response == nil && errorMessage != NULL) {
-        *errorMessage = @"Failed to decode tun session response.";
-    }
-    return response;
-}
-
 static NSDictionary* requestActiveSession(NSDictionary* request) {
     NSString* errorMessage = nil;
     NSDictionary* response = sendRequestToControlServer(request, &errorMessage);
@@ -1255,32 +555,6 @@ static NSDictionary* requestActiveSession(NSDictionary* request) {
         return makeResponse(NO, errorMessage ?: @"Failed to contact tun session.", nil);
     }
     return response;
-}
-
-static BOOL canTreatSessionAsActiveResponse(NSDictionary* response) {
-    if (![response[@"ok"] boolValue]) {
-        return NO;
-    }
-    NSString* session = response[@"session"];
-    return [session isKindOfClass:[NSString class]] && ![session isEqualToString:@"inactive"];
-}
-
-static NSString* currentSessionType(void) {
-    NSMutableDictionary* backup = loadRouteBackup();
-    NSString* value = backup[ROUTE_BACKUP_SESSION_TYPE_KEY];
-    return [value isKindOfClass:[NSString class]] && value.length > 0 ? value : SESSION_TYPE_NONE;
-}
-
-static NSString* currentSessionOwner(void) {
-    NSMutableDictionary* backup = loadRouteBackup();
-    NSString* value = backup[ROUTE_BACKUP_SESSION_OWNER_KEY];
-    return [value isKindOfClass:[NSString class]] && value.length > 0 ? value : SESSION_OWNER_NONE;
-}
-
-static NSString* currentControlPlane(void) {
-    NSMutableDictionary* backup = loadRouteBackup();
-    NSString* value = backup[ROUTE_BACKUP_CONTROL_PLANE_KEY];
-    return [value isKindOfClass:[NSString class]] && value.length > 0 ? value : CONTROL_PLANE_NONE;
 }
 
 static BOOL isExternalFDSession(void) {
@@ -1496,7 +770,7 @@ static BOOL removeIPv4TakeoverRoutes(NSString* tunName, NSString** errorMessage)
 
 static void syncRuntimeSessionFromBackup(void) {
     NSMutableDictionary* backup = loadRouteBackup();
-    if (activeTunName.length == 0) {
+    if (activeTunName.length == 0 && backupRepresentsRecoverableActiveSession(backup)) {
         activeTunName = backup[ROUTE_BACKUP_TUN_NAME_KEY] ?: @"";
     }
     if (activeIPv4TakeoverRoutes == nil) {
@@ -1590,24 +864,6 @@ static NSString* currentSessionState(void) {
     return state;
 }
 
-static NSArray<NSString*>* ipLiteralAddressesFromPath(NSString* path) {
-    NSData* data = [NSData dataWithContentsOfFile:path];
-    if (data == nil) {
-        return @[];
-    }
-    id jsonObject = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if ([jsonObject isKindOfClass:[NSArray class]]) {
-        return jsonObject;
-    }
-    if ([jsonObject isKindOfClass:[NSDictionary class]]) {
-        NSArray* entries = jsonObject[@"entries"];
-        if ([entries isKindOfClass:[NSArray class]]) {
-            return entries;
-        }
-    }
-    return @[];
-}
-
 static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments) {
     if (arguments.count < 2) {
         return makeResponse(NO, @"Missing tun subcommand.", nil);
@@ -1673,7 +929,7 @@ static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments) {
         if (!didStart) {
             return makeResponse(NO, errorMessage ?: @"Failed to start tun session.", nil);
         }
-        if (!startControlSocketServer(&errorMessage)) {
+        if (!startControlSocketServer(&controlServerSocketFD, &errorMessage)) {
             NSMutableDictionary* backup = loadRouteBackup();
             updateRouteBackupState(backup, ROUTE_BACKUP_STATE_ACTIVE, @"");
             resetTunRuntimeState(backup, ROUTE_BACKUP_STATE_IDLE, @"");
@@ -1688,7 +944,9 @@ static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments) {
         if (!asJSON) {
             printf("tun session started\n");
         }
-        controlSocketAcceptLoop();
+        controlSocketAcceptLoop(controlServerSocketFD, &runLoopMark, ^NSDictionary* (NSDictionary* request) {
+            return processServerRequest(request);
+        });
         releaseTunSessionLock();
         return makeResponse(YES, @"Tun session exited.", tunStatusPayload());
     }
@@ -1732,7 +990,7 @@ static NSDictionary* handleRouteCommand(NSArray<NSString*>* arguments) {
         rawEntries = [filteredArguments subarrayWithRange:NSMakeRange(2, filteredArguments.count - 2)];
     }
     NSArray<NSString*>* invalidItems = nil;
-    NSArray<NSDictionary*>* entries = normalizedEntriesFromArray(rawEntries, &invalidItems);
+        NSArray<NSDictionary*>* entries = normalizedEntriesFromArray(rawEntries, routeHelper, &invalidItems);
     if (invalidItems.count > 0) {
         return makeResponse(NO, @"Some route entries are invalid.", @{@"invalid": invalidItems});
     }
@@ -1852,6 +1110,7 @@ int main(int argc, const char * argv[])
         for (int index = 1; index < argc; index++) {
             [arguments addObject:[NSString stringWithUTF8String:argv[index]]];
         }
+        debugLoggingEnabled = shouldEnableDebugLogging(arguments);
         NSString* command = arguments[0];
         BOOL asJSON = shouldOutputJSON(arguments);
         NSDictionary* response = nil;

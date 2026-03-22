@@ -7,9 +7,16 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		34315F9E297DB3A9000DDA2D /* route.m in Sources */ = {isa = PBXBuildFile; fileRef = 34315F9D297DB3A9000DDA2D /* route.m */; };
+		34315F9E297DB3A9000DDA2D /* route_helper.m in Sources */ = {isa = PBXBuildFile; fileRef = 34315F9D297DB3A9000DDA2D /* route_helper.m */; };
+		3483B900F00A100000000001 /* helper_paths.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A100000000002 /* helper_paths.m */; };
+		3483B900F00A100000000003 /* session_backup_store.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A100000000004 /* session_backup_store.m */; };
+		3483B900F00A100000000005 /* route_whitelist_store.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A100000000006 /* route_whitelist_store.m */; };
+		3483B900F00A10000000000A /* proxy_manager.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A10000000000B /* proxy_manager.m */; };
+		3483B900F00A10000000000C /* route_entry_normalizer.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A10000000000D /* route_entry_normalizer.m */; };
+		3483B900F00A10000000000E /* control_socket_transport.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A10000000000F /* control_socket_transport.m */; };
+		3483B900F00A100000000013 /* session_state.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A100000000014 /* session_state.m */; };
 		34AA955F299B5E7500E06D1B /* Tun2socks.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 34AA955E299B5E7500E06D1B /* Tun2socks.xcframework */; };
-		34BB19C9297A7A9600331407 /* tun.m in Sources */ = {isa = PBXBuildFile; fileRef = 34BB19C8297A7A9600331407 /* tun.m */; };
+		34BB19C9297A7A9600331407 /* tun_device.m in Sources */ = {isa = PBXBuildFile; fileRef = 34BB19C8297A7A9600331407 /* tun_device.m */; };
 		9504C07D1C662C3000352520 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 9504C07C1C662C3000352520 /* AppDelegate.m */; };
 		9504C0801C662C3000352520 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 9504C07F1C662C3000352520 /* main.m */; };
 		9504C0821C662C3000352520 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9504C0811C662C3000352520 /* Assets.xcassets */; };
@@ -91,11 +98,25 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		34315F9D297DB3A9000DDA2D /* route.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = route.m; sourceTree = "<group>"; };
-		34315F9F297DB3BC000DDA2D /* route.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = route.h; sourceTree = "<group>"; };
+		34315F9D297DB3A9000DDA2D /* route_helper.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = route_helper.m; sourceTree = "<group>"; };
+		34315F9F297DB3BC000DDA2D /* route_helper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = route_helper.h; sourceTree = "<group>"; };
+		3483B900F00A100000000002 /* helper_paths.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = helper_paths.m; sourceTree = "<group>"; };
+		3483B900F00A100000000007 /* helper_paths.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = helper_paths.h; sourceTree = "<group>"; };
+		3483B900F00A100000000004 /* session_backup_store.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = session_backup_store.m; sourceTree = "<group>"; };
+		3483B900F00A100000000008 /* session_backup_store.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = session_backup_store.h; sourceTree = "<group>"; };
+		3483B900F00A100000000006 /* route_whitelist_store.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = route_whitelist_store.m; sourceTree = "<group>"; };
+		3483B900F00A100000000009 /* route_whitelist_store.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = route_whitelist_store.h; sourceTree = "<group>"; };
+		3483B900F00A10000000000B /* proxy_manager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = proxy_manager.m; sourceTree = "<group>"; };
+		3483B900F00A100000000010 /* proxy_manager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = proxy_manager.h; sourceTree = "<group>"; };
+		3483B900F00A10000000000D /* route_entry_normalizer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = route_entry_normalizer.m; sourceTree = "<group>"; };
+		3483B900F00A100000000011 /* route_entry_normalizer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = route_entry_normalizer.h; sourceTree = "<group>"; };
+		3483B900F00A10000000000F /* control_socket_transport.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = control_socket_transport.m; sourceTree = "<group>"; };
+		3483B900F00A100000000012 /* control_socket_transport.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = control_socket_transport.h; sourceTree = "<group>"; };
+		3483B900F00A100000000014 /* session_state.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = session_state.m; sourceTree = "<group>"; };
+		3483B900F00A100000000015 /* session_state.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = session_state.h; sourceTree = "<group>"; };
 		34AA955E299B5E7500E06D1B /* Tun2socks.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Tun2socks.xcframework; path = Librarys/Tun2socks.xcframework; sourceTree = "<group>"; };
-		34BB19C8297A7A9600331407 /* tun.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = tun.m; sourceTree = "<group>"; };
-		34BB19CB297A8E6600331407 /* tun.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = tun.h; sourceTree = "<group>"; };
+		34BB19C8297A7A9600331407 /* tun_device.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = tun_device.m; sourceTree = "<group>"; };
+		34BB19CB297A8E6600331407 /* tun_device.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = tun_device.h; sourceTree = "<group>"; };
 		9504C0781C662C3000352520 /* V2RayXS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = V2RayXS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9504C07B1C662C3000352520 /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
 		9504C07C1C662C3000352520 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
@@ -279,12 +300,26 @@
 		9504C0C71C662DB500352520 /* v2rayx_sysconf */ = {
 			isa = PBXGroup;
 			children = (
+				3483B900F00A100000000012 /* control_socket_transport.h */,
+				3483B900F00A10000000000F /* control_socket_transport.m */,
+				3483B900F00A100000000007 /* helper_paths.h */,
+				3483B900F00A100000000002 /* helper_paths.m */,
 				9504C0C81C662DB500352520 /* main.m */,
+				3483B900F00A100000000010 /* proxy_manager.h */,
+				3483B900F00A10000000000B /* proxy_manager.m */,
+				3483B900F00A100000000011 /* route_entry_normalizer.h */,
+				3483B900F00A10000000000D /* route_entry_normalizer.m */,
+				3483B900F00A100000000009 /* route_whitelist_store.h */,
+				3483B900F00A100000000006 /* route_whitelist_store.m */,
+				3483B900F00A100000000008 /* session_backup_store.h */,
+				3483B900F00A100000000004 /* session_backup_store.m */,
+				3483B900F00A100000000015 /* session_state.h */,
+				3483B900F00A100000000014 /* session_state.m */,
 				9DA398B5209ECED400784947 /* sysconf_version.h */,
-				34BB19C8297A7A9600331407 /* tun.m */,
-				34BB19CB297A8E6600331407 /* tun.h */,
-				34315F9D297DB3A9000DDA2D /* route.m */,
-				34315F9F297DB3BC000DDA2D /* route.h */,
+				34BB19C8297A7A9600331407 /* tun_device.m */,
+				34BB19CB297A8E6600331407 /* tun_device.h */,
+				34315F9D297DB3A9000DDA2D /* route_helper.m */,
+				34315F9F297DB3BC000DDA2D /* route_helper.h */,
 			);
 			path = v2rayx_sysconf;
 			sourceTree = "<group>";
@@ -592,9 +627,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				34315F9E297DB3A9000DDA2D /* route.m in Sources */,
+				34315F9E297DB3A9000DDA2D /* route_helper.m in Sources */,
+				3483B900F00A10000000000E /* control_socket_transport.m in Sources */,
+				3483B900F00A100000000001 /* helper_paths.m in Sources */,
 				9504C0C91C662DB500352520 /* main.m in Sources */,
-				34BB19C9297A7A9600331407 /* tun.m in Sources */,
+				3483B900F00A10000000000A /* proxy_manager.m in Sources */,
+				3483B900F00A10000000000C /* route_entry_normalizer.m in Sources */,
+				3483B900F00A100000000005 /* route_whitelist_store.m in Sources */,
+				3483B900F00A100000000003 /* session_backup_store.m in Sources */,
+				3483B900F00A100000000013 /* session_state.m in Sources */,
+				34BB19C9297A7A9600331407 /* tun_device.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
