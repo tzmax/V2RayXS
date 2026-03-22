@@ -21,6 +21,9 @@
 #import "helper_paths.h"
 #import "proxy_manager.h"
 #import "active_route_reconciler.h"
+#import "daemon_service.h"
+#import "daemon_rpc.h"
+#import "daemon_state.h"
 #import "helper_runtime_context.h"
 #import "route_command_service.h"
 #import "route_entry_normalizer.h"
@@ -32,7 +35,7 @@
 #import "control_socket_transport.h"
 #import <stdarg.h>
 
-#define INFO "v2rayx_sysconf\nusage:\n  v2rayx_sysconf -v\n  v2rayx_sysconf off [--debug]\n  v2rayx_sysconf auto [--debug]\n  v2rayx_sysconf global <socksPort> <httpPort> [--debug]\n  v2rayx_sysconf save [--debug]\n  v2rayx_sysconf restore [--debug]\n  v2rayx_sysconf tun start <socksPort> [--debug]\n  v2rayx_sysconf tun allocate [<utunName>] <sendSocketFD> [--debug]\n  v2rayx_sysconf tun activate <utunName> [--debug]\n  v2rayx_sysconf tun deactivate [<utunName>] [--json] [--debug]\n  v2rayx_sysconf tun stop [--json] [--debug]\n  v2rayx_sysconf tun status [--json] [--debug]\n  v2rayx_sysconf route add <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route del <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route list [--json] [--debug]\n  v2rayx_sysconf route clear [--json] [--require-active] [--debug]\n  v2rayx_sysconf route apply [--json] [--debug]\n  v2rayx_sysconf route sync-file <path> [--json] [--require-active] [--debug]\n"
+#define INFO "v2rayx_sysconf\nusage:\n  v2rayx_sysconf -v\n  v2rayx_sysconf off [--debug]\n  v2rayx_sysconf auto [--debug]\n  v2rayx_sysconf global <socksPort> <httpPort> [--debug]\n  v2rayx_sysconf save [--debug]\n  v2rayx_sysconf restore [--debug]\n  v2rayx_sysconf daemon run [--debug]\n  v2rayx_sysconf daemon status [--json] [--debug]\n  v2rayx_sysconf daemon stop [--json] [--debug]\n  v2rayx_sysconf tun start <socksPort> [--json] [--debug]\n  v2rayx_sysconf tun allocate [<utunName>] [--json] [--debug]\n  v2rayx_sysconf tun activate [<leaseId>] [--json] [--debug]\n  v2rayx_sysconf tun deactivate [--json] [--debug]\n  v2rayx_sysconf tun stop [--json] [--debug]\n  v2rayx_sysconf tun status [--json] [--debug]\n  v2rayx_sysconf tun cleanup [--json] [--debug]\n  v2rayx_sysconf route add <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route del <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route list [--json] [--debug]\n  v2rayx_sysconf route clear [--json] [--require-active] [--debug]\n  v2rayx_sysconf route apply [--json] [--debug]\n  v2rayx_sysconf route sync-file <path> [--json] [--require-active] [--debug]\n"
 
 static NSArray<NSString*>* const IPv4TakeoverCIDRs = @[@"0.0.0.0/1", @"128.0.0.0/1"];
 
@@ -68,22 +71,19 @@ static NSDictionary* makeResponse(BOOL ok, NSString* message, NSDictionary* payl
 static void printResponse(NSDictionary* response, BOOL asJSON);
 static BOOL shouldOutputJSON(NSArray<NSString*>* arguments);
 static BOOL shouldEnableDebugLogging(NSArray<NSString*>* arguments);
-static void debugLog(NSString* format, ...);
 static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments);
-static NSDictionary* tunStatusPayload(void);
+static NSDictionary* runtimeSessionStatusPayload(void);
 static NSDictionary* routeListPayload(void);
 static NSDictionary* requestActiveSession(NSDictionary* request);
-static BOOL isExternalFDSession(void);
 static NSDictionary* stopTunSession(void);
 static BOOL setupTunSession(int localProxyPort, NSString** errorMessage);
-static BOOL activateExternalTunSession(NSString* tunName, NSString** errorMessage);
-static NSDictionary* allocateTunFDSession(NSString* tunName, int sendSocketFD);
-static NSDictionary* deactivateExternalTunSession(NSString* expectedTunName);
-static NSDictionary* processServerRequest(NSDictionary* request);
+static BOOL activateAllocatedTunLease(NSString* tunName, NSString** errorMessage);
+static NSDictionary* processServerRequest(NSDictionary* request, int* responseFDOut);
 static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state, NSString* lastError);
 static void updateRouteBackupRoutes(NSMutableDictionary* backup);
 static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments);
 static NSDictionary* handleRouteCommand(NSArray<NSString*>* arguments);
+static NSDictionary* handleDaemonCommand(NSArray<NSString*>* arguments);
 static void cleanupHandle(int signal_ns);
 
 static BOOL acquireTunSessionLock(NSString** errorMessage) {
@@ -167,17 +167,6 @@ static BOOL shouldEnableDebugLogging(NSArray<NSString*>* arguments) {
     return [arguments containsObject:@"--debug"];
 }
 
-static void debugLog(NSString* format, ...) {
-    if (!debugLoggingEnabled) {
-        return;
-    }
-    va_list args;
-    va_start(args, format);
-    NSString* message = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    fprintf(stderr, "[debug] %s\n", [message UTF8String]);
-}
-
 static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments) {
     NSTask* task = [[NSTask alloc] init];
     task.launchPath = launchPath;
@@ -201,10 +190,6 @@ static NSDictionary* updateBackupForActiveRoutes(NSString* state, NSString* last
     return helperRuntimeUpdateBackupForActiveRoutes(runtimeContext, state, lastError);
 }
 
-static void syncRuntimeSessionFromBackupBridge(void) {
-    helperRuntimeSyncRuntimeSessionFromBackup(runtimeContext);
-}
-
 static BOOL loadDefaultRouteBaselineBridge(NSString** errorMessage) {
     return helperRuntimeLoadDefaultRouteBaseline(runtimeContext, errorMessage);
 }
@@ -221,17 +206,51 @@ static void resetTunRuntimeStateBridge(NSMutableDictionary* routeBackup, NSStrin
     helperRuntimeResetTunRuntimeState(runtimeContext, routeBackup, state, lastError);
 }
 
-static NSString* currentSessionStateBridge(void) {
-    return helperRuntimeCurrentSessionState(runtimeContext);
+static NSDictionary* cliDiagnosticStatusPayload(void);
+
+static NSDictionary* buildDaemonStatusResponsePayload(NSDictionary* runtimeStatus) {
+    NSDictionary* status = [runtimeStatus isKindOfClass:[NSDictionary class]] ? runtimeStatus : runtimeSessionStatusPayload();
+    return @{
+        @"daemon": isControlSocketReachable() ? @"available" : @"unavailable",
+        @"session": status[@"session"] ?: daemonStateSessionStatus(),
+        @"dataPlaneKind": status[@"sessionType"] ?: daemonStateDataPlaneKind(),
+        @"tunName": status[@"tunName"] ?: daemonStateTunName(),
+        @"leaseId": status[@"leaseId"] ?: daemonStateLeaseIdentifier(),
+        @"socksPort": daemonStateSocksPort(),
+        @"status": status,
+    };
 }
 
-static NSDictionary* tunStatusPayload(void) {
+static NSDictionary* buildTunStatusResponsePayload(NSDictionary* runtimeStatus) {
+    NSDictionary* status = [runtimeStatus isKindOfClass:[NSDictionary class]] ? runtimeStatus : runtimeSessionStatusPayload();
+    return makeResponse(YES, @"Tun session status.", status);
+}
+
+static NSDictionary* buildTunDiagnosticStatusResponse(void) {
+    return makeResponse(YES, @"Tun session status.", cliDiagnosticStatusPayload());
+}
+
+static NSDictionary* daemonEnvelopeStatusPayload(void) {
+    return buildDaemonStatusResponsePayload(runtimeSessionStatusPayload());
+}
+
+static void resetDaemonRuntimeState(void) {
+    daemonServiceResetRuntimeState();
+    activeTunName = @"";
+    defaultRouteGatewayV4 = @"";
+    defaultRouteGatewayV6 = @"";
+    defaultRouteInterfaceV4 = @"";
+    defaultRouteInterfaceV6 = @"";
+    [activeWhitelistRoutes removeAllObjects];
+    [activeIPv4TakeoverRoutes removeAllObjects];
+    tunControl = nil;
+}
+
+static NSDictionary* runtimeSessionStatusPayload(void) {
     NSMutableDictionary* backup = loadRouteBackup();
     NSArray* persistedEntries = storeEntries();
-    BOOL socketAvailable = access([helperControlSocketPath() fileSystemRepresentation], F_OK) == 0;
-    NSUInteger appliedCount = activeWhitelistRoutes != nil ? [activeWhitelistRoutes count] : [backup[ROUTE_BACKUP_WHITELIST_ROUTES_KEY] count];
-    NSString* state = currentSessionStateBridge();
-    NSString* tunName = activeTunName.length > 0 ? activeTunName : (backup[ROUTE_BACKUP_TUN_NAME_KEY] ?: @"");
+    BOOL socketAvailable = isControlSocketReachable();
+    NSString* tunName = daemonStateTunName();
     BOOL tunExists = NO;
     BOOL tunUp = NO;
     if (tunName.length > 0) {
@@ -240,34 +259,55 @@ static NSDictionary* tunStatusPayload(void) {
         tunExists = [taskResult[@"status"] intValue] == 0;
         tunUp = tunExists && [ifconfigOutput containsString:@"<UP,"];
     }
-    NSArray* activeTakeoverEntries = activeIPv4TakeoverRouteEntries(activeIPv4TakeoverRoutes, backup);
     return @{
-        @"sessionType": currentSessionType(),
-        @"sessionOwner": currentSessionOwner(),
-        @"controlPlane": currentControlPlane(),
-        @"session": state,
+        @"sessionType": daemonStateDataPlaneKind(),
+        @"sessionOwner": daemonStateIsActive() ? @"daemon" : @"none",
+        @"controlPlane": socketAvailable ? @"socket" : @"none",
+        @"session": daemonStateSessionStatus(),
         @"socket": socketAvailable ? @"available" : @"unavailable",
-        @"tunName": tunName,
+        @"tunName": tunName ?: @"",
         @"tunExists": @(tunExists),
         @"tunUp": @(tunUp),
         @"defaultGatewayV4": defaultRouteGatewayV4 ?: @"",
         @"defaultGatewayV6": defaultRouteGatewayV6 ?: @"",
         @"defaultInterfaceV4": defaultRouteInterfaceV4 ?: @"",
         @"defaultInterfaceV6": defaultRouteInterfaceV6 ?: @"",
-        @"ipv4TakeoverRoutes": activeTakeoverEntries ?: @[],
+        @"ipv4TakeoverRoutes": activeIPv4TakeoverRoutes ?: @[],
         @"whitelistPersistedCount": @([persistedEntries count]),
-        @"whitelistAppliedCount": @(appliedCount),
+        @"whitelistAppliedCount": @([activeWhitelistRoutes count]),
         @"lastError": backup[ROUTE_BACKUP_LAST_ERROR_KEY] ?: @"",
+        @"leaseId": daemonStateLeaseIdentifier(),
     };
 }
 
 static NSDictionary* routeListPayload(void) {
     NSArray* persistedEntries = storeEntries();
-    NSArray* appliedEntries = activeWhitelistRoutes != nil ? [activeWhitelistRoutes allValues] : loadRouteBackup()[ROUTE_BACKUP_WHITELIST_ROUTES_KEY];
+    NSArray* appliedEntries = activeWhitelistRoutes != nil ? [activeWhitelistRoutes allValues] : @[];
     return @{
-        @"session": currentSessionStateBridge(),
+        @"session": daemonStateSessionStatus(),
         @"persisted": persistedEntries ?: @[],
         @"applied": appliedEntries ?: @[],
+    };
+}
+
+static NSDictionary* cliDiagnosticStatusPayload(void) {
+    NSMutableDictionary* backup = loadRouteBackup();
+    BOOL daemonReachable = isControlSocketReachable();
+    BOOL staleSocket = access([helperControlSocketPath() fileSystemRepresentation], F_OK) == 0 && !daemonReachable;
+    BOOL staleLock = access([helperTunSessionLockPath() fileSystemRepresentation], F_OK) == 0;
+    return @{
+        @"daemon": daemonReachable ? @"available" : @"unavailable",
+        @"session": daemonReachable ? @"unknown" : @"inactive",
+        @"diagnostics": @{
+            @"staleSocket": @(staleSocket),
+            @"staleLock": @(staleLock),
+            @"historicalBackup": @([backup count] > 0),
+        },
+        @"history": @{
+            @"lastError": backup[ROUTE_BACKUP_LAST_ERROR_KEY] ?: @"",
+            @"lastTunName": backup[ROUTE_BACKUP_TUN_NAME_KEY] ?: @"",
+            @"lastSessionType": backup[ROUTE_BACKUP_SESSION_TYPE_KEY] ?: SESSION_TYPE_NONE,
+        },
     };
 }
 
@@ -297,7 +337,6 @@ static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state,
 }
 
 static NSDictionary* stopTunSession(void) {
-    syncRuntimeSessionFromBackupBridge();
     NSString* lockError = nil;
     if (!acquireTunSessionLock(&lockError)) {
         return makeResponse(NO, lockError ?: @"Another tun session operation is already in progress.", nil);
@@ -311,14 +350,9 @@ static NSDictionary* stopTunSession(void) {
     NSString* routeError = nil;
     BOOL removedTakeover = removeIPv4TakeoverRoutesBridge(activeTunName, &routeError);
     resetTunRuntimeStateBridge(backup, ROUTE_BACKUP_STATE_IDLE, @"");
+    daemonStateReset();
     BOOL restored = YES;
-    if (controlServerSocketFD != -1) {
-        close(controlServerSocketFD);
-        controlServerSocketFD = -1;
-    }
-    unlink([helperControlSocketPath() fileSystemRepresentation]);
     activeTunName = @"";
-    runLoopMark = NO;
     releaseTunSessionLock();
     if (!removedTakeover && routeError.length > 0) {
         backup[ROUTE_BACKUP_LAST_ERROR_KEY] = routeError;
@@ -327,79 +361,105 @@ static NSDictionary* stopTunSession(void) {
     return makeResponse(restored && removedTakeover && failedEntries.count == 0, (restored && removedTakeover) ? @"Tun session stopped." : @"Failed to fully restore tun session.", @{@"removed": removedEntries, @"failed": failedEntries, @"takeoverRemoved": @(removedTakeover)});
 }
 
-static NSDictionary* allocateTunFDSession(NSString* tunName, int sendSocketFD) {
-    if (tunName != nil && tunName.length > 0) {
-        if (![tunName hasPrefix:@"utun"]) {
-            return makeResponse(NO, @"Tun interface name must be utunN.", nil);
-        }
+static NSDictionary* stopDaemon(void) {
+    if (controlServerSocketFD != -1) {
+        close(controlServerSocketFD);
+        controlServerSocketFD = -1;
     }
-    if (sendSocketFD < 0) {
-        return makeResponse(NO, @"Missing tun fd transport socket fd.", nil);
-    }
+    unlink([helperControlSocketPath() fileSystemRepresentation]);
+    runLoopMark = NO;
+    return makeResponse(YES, @"Daemon stopped.", buildDaemonStatusResponsePayload(nil));
+}
 
-    debugLog(@"allocating tun fd preferredName=%@ sendSocketFD=%d", tunName ?: @"", sendSocketFD);
+static NSDictionary* allocateTunLease(NSString* tunName, int* responseFDOut) {
+    if (tunName != nil && tunName.length > 0 && ![tunName hasPrefix:@"utun"]) {
+        return makeResponse(NO, @"Tun interface name must be utunN.", nil);
+    }
+    if (daemonStateIsActive()) {
+        return makeResponse(NO, @"A tun session is already active.", nil);
+    }
     NSString* actualTunName = nil;
     int tunFD = createTUNWithName(tunName, &actualTunName);
     if (tunFD < 0) {
-        debugLog(@"createTUNWithName failed errno=%d", -tunFD);
         return makeResponse(NO, [NSString stringWithFormat:@"Failed to create tun interface (errno=%d).", -tunFD], nil);
     }
     if (actualTunName.length == 0 && tunName.length > 0) {
         actualTunName = tunName;
     }
-
     NSString* setupError = nil;
     if (!ensureTUNInterfaceReady(actualTunName, 1500, &setupError)) {
-        debugLog(@"ensureTUNInterfaceReady failed tunName=%@ error=%@", actualTunName ?: @"", setupError ?: @"");
         close(tunFD);
         return makeResponse(NO, setupError ?: @"Failed to configure tun interface.", nil);
     }
-
-    NSDictionary* payload = @{
-        @"tunName": actualTunName ?: @"",
-    };
-    NSData* payloadData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
-    NSString* payloadString = [[NSString alloc] initWithData:payloadData encoding:NSUTF8StringEncoding] ?: @"{}";
-    if (!sendFileDescriptor(sendSocketFD, tunFD, payloadString)) {
-        debugLog(@"sendFileDescriptor failed sendSocketFD=%d tunFD=%d payload=%@ errno=%d", sendSocketFD, tunFD, payloadString, errno);
+    NSString* leaseId = [[NSUUID UUID] UUIDString];
+    NSString* leaseError = nil;
+    if (!daemonStateStoreFDLease(leaseId, actualTunName, tunFD, &leaseError)) {
         close(tunFD);
-        return makeResponse(NO, @"Failed to send tun fd to caller.", nil);
+        return makeResponse(NO, leaseError ?: @"Failed to store tun lease.", nil);
     }
-
-    debugLog(@"allocated tun fd actualName=%@ tunFD=%d", actualTunName ?: @"", tunFD);
-
-    close(tunFD);
-    return makeResponse(YES, @"Tun fd prepared.", @{@"tunName": actualTunName ?: @""});
+    if (responseFDOut != NULL) {
+        *responseFDOut = dup(tunFD);
+    }
+    return makeResponse(YES, @"Tun lease prepared.", @{@"tunName": actualTunName ?: @"", @"leaseId": leaseId});
 }
 
-static NSDictionary* deactivateExternalTunSession(NSString* expectedTunName) {
-    syncRuntimeSessionFromBackupBridge();
-    if (expectedTunName.length > 0 && activeTunName.length > 0 && ![expectedTunName isEqualToString:activeTunName]) {
-        return makeResponse(NO, @"Requested tun name does not match active external tun session.", nil);
+static NSDictionary* processServerRequest(NSDictionary* request, int* responseFDOut) {
+    if (responseFDOut != NULL) {
+        *responseFDOut = -1;
     }
-    return stopTunSession();
-}
-
-static NSDictionary* processServerRequest(NSDictionary* request) {
-    NSString* command = request[@"cmd"];
-    NSArray* entries = request[@"entries"];
-    if ([command isEqualToString:@"status"]) {
-        return makeResponse(YES, @"Tun session status.", tunStatusPayload());
+    NSString* command = daemonRPCCommand(request);
+    NSDictionary* payload = daemonRPCPayload(request);
+    NSArray* entries = payload[@"entries"];
+    if ([command isEqualToString:@"session.status"] || [command isEqualToString:@"status"]) {
+        return makeResponse(YES, @"Tun session status.", runtimeSessionStatusPayload());
+    }
+    if ([command isEqualToString:@"session.start_embedded"]) {
+        NSInteger socksPort = [payload[@"socksPort"] integerValue];
+        NSString* errorMessage = nil;
+        if (!setupTunSession((int)socksPort, &errorMessage)) {
+            return makeResponse(NO, errorMessage ?: @"Failed to start tun session.", nil);
+        }
+        daemonStateActivateEmbeddedSession(activeTunName, socksPort);
+        NSDictionary* syncResponse = syncActiveWhitelistWithEntries(storeEntries(), YES, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, &activeWhitelistRoutes, activeTunName, ^NSDictionary* (NSString* state, NSString* lastError) {
+            return updateBackupForActiveRoutes(state, lastError);
+        });
+        if (![syncResponse[@"ok"] boolValue]) {
+            NSMutableDictionary* backup = loadRouteBackup();
+            updateRouteBackupState(backup, ROUTE_BACKUP_STATE_ACTIVE, syncResponse[@"message"] ?: @"whitelist sync failed");
+        }
+        return makeResponse(YES, @"Embedded tun session started.", runtimeSessionStatusPayload());
+    }
+    if ([command isEqualToString:@"session.allocate_fd"]) {
+        return allocateTunLease(payload[@"preferredTunName"], responseFDOut);
+    }
+    if ([command isEqualToString:@"session.activate"]) {
+        NSString* errorMessage = nil;
+        NSString* activatedTunName = nil;
+        NSString* leaseId = nil;
+        if (!daemonStateResolvePendingLease(payload[@"leaseId"], &activatedTunName, &leaseId, &errorMessage)) {
+            return makeResponse(NO, errorMessage ?: @"Failed to activate pending tun lease.", nil);
+        }
+        if (!activateAllocatedTunLease(activatedTunName, &errorMessage)) {
+            daemonStateClearLease();
+            return makeResponse(NO, errorMessage ?: @"Failed to activate tun lease.", nil);
+        }
+        daemonStateActivatePendingLease();
+        return makeResponse(YES, @"Tun lease activated.", @{@"leaseId": leaseId ?: @"", @"tunName": activatedTunName ?: @"", @"status": runtimeSessionStatusPayload()});
     }
     if ([command isEqualToString:@"route-list"]) {
         return makeResponse(YES, @"Route whitelist entries.", routeListPayload());
     }
-    if ([command isEqualToString:@"route-sync"]) {
+    if ([command isEqualToString:@"session.route.sync"] || [command isEqualToString:@"route-sync"]) {
         return syncActiveWhitelistWithEntries(entries ?: @[], YES, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, &activeWhitelistRoutes, activeTunName, ^NSDictionary* (NSString* state, NSString* lastError) {
             return updateBackupForActiveRoutes(state, lastError);
         });
     }
-    if ([command isEqualToString:@"route-add"]) {
+    if ([command isEqualToString:@"session.route.add"] || [command isEqualToString:@"route-add"]) {
         return syncActiveWhitelistWithEntries(entries ?: @[], NO, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, &activeWhitelistRoutes, activeTunName, ^NSDictionary* (NSString* state, NSString* lastError) {
             return updateBackupForActiveRoutes(state, lastError);
         });
     }
-    if ([command isEqualToString:@"route-del"]) {
+    if ([command isEqualToString:@"session.route.del"] || [command isEqualToString:@"route-del"]) {
         NSMutableArray* removed = [[NSMutableArray alloc] init];
         NSMutableArray* failed = [[NSMutableArray alloc] init];
         removeWhitelistEntries(entries ?: @[], routeHelper, &activeWhitelistRoutes, removed, failed);
@@ -407,7 +467,7 @@ static NSDictionary* processServerRequest(NSDictionary* request) {
         updateRouteBackupState(backup, activeTunName.length > 0 ? ROUTE_BACKUP_STATE_ACTIVE : ROUTE_BACKUP_STATE_IDLE, failed.count > 0 ? @"route delete failed" : @"");
         return makeResponse(failed.count == 0, failed.count == 0 ? @"Routes removed from active whitelist." : @"Failed to remove some active routes.", @{@"removed": removed, @"failed": failed, @"active": [activeWhitelistRoutes allValues] ?: @[]});
     }
-    if ([command isEqualToString:@"route-clear"]) {
+    if ([command isEqualToString:@"session.route.clear"] || [command isEqualToString:@"route-clear"]) {
         NSMutableArray* removed = [[NSMutableArray alloc] init];
         NSMutableArray* failed = [[NSMutableArray alloc] init];
         removeWhitelistEntries([activeWhitelistRoutes allValues] ?: @[], routeHelper, &activeWhitelistRoutes, removed, failed);
@@ -415,8 +475,11 @@ static NSDictionary* processServerRequest(NSDictionary* request) {
         updateRouteBackupState(backup, activeTunName.length > 0 ? ROUTE_BACKUP_STATE_ACTIVE : ROUTE_BACKUP_STATE_IDLE, failed.count > 0 ? @"route clear failed" : @"");
         return makeResponse(failed.count == 0, failed.count == 0 ? @"Active whitelist cleared." : @"Failed to clear active whitelist.", @{@"removed": removed, @"failed": failed});
     }
-    if ([command isEqualToString:@"stop"]) {
+    if ([command isEqualToString:@"session.stop"] || [command isEqualToString:@"stop"]) {
         return stopTunSession();
+    }
+    if ([command isEqualToString:@"daemon.stop"]) {
+        return stopDaemon();
     }
     return makeResponse(NO, @"Unknown server command.", nil);
 }
@@ -425,23 +488,39 @@ static NSDictionary* requestActiveSession(NSDictionary* request) {
     NSString* errorMessage = nil;
     NSDictionary* response = sendRequestToControlServer(request, &errorMessage);
     if (response == nil) {
-        if (isExternalFDSession()) {
-            return makeResponse(NO, errorMessage ?: @"No active control socket for external tun session.", nil);
-        }
-        NSString* sessionState = currentSessionStateBridge();
-        if (![sessionState isEqualToString:@"inactive"]) {
-            return makeResponse(YES, @"Tun session state available from backup but control socket is unavailable.", tunStatusPayload());
-        }
         return makeResponse(NO, errorMessage ?: @"Failed to contact tun session.", nil);
     }
     return response;
 }
 
+static NSDictionary* requestDaemonSession(NSDictionary* request, int* receivedFDOut) {
+    NSString* errorMessage = nil;
+    NSDictionary* response = sendRequestToControlServerWithFD(request, receivedFDOut, &errorMessage);
+    if (response == nil) {
+        return makeResponse(NO, errorMessage ?: @"Failed to contact daemon.", nil);
+    }
+    return response;
+}
+
 static NSDictionary* handleRouteCommand(NSArray<NSString*>* arguments) {
-    return routeCommandServiceHandle(arguments, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, &activeWhitelistRoutes, activeTunName, isExternalFDSession(), ^NSDictionary* (NSDictionary* request) {
-        return requestActiveSession(request);
+    return routeCommandServiceHandle(arguments, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, &activeWhitelistRoutes, activeTunName, NO, ^NSDictionary* (NSDictionary* request) {
+        NSMutableDictionary* rpcPayload = [NSMutableDictionary dictionaryWithDictionary:request];
+        NSString* legacyCommand = request[@"cmd"];
+        if ([legacyCommand isEqualToString:@"route-sync"]) {
+            return requestActiveSession(daemonRPCMakeRequest(@"session.route.sync", @{@"entries": request[@"entries"] ?: @[]}));
+        }
+        if ([legacyCommand isEqualToString:@"route-add"]) {
+            return requestActiveSession(daemonRPCMakeRequest(@"session.route.add", @{@"entries": request[@"entries"] ?: @[]}));
+        }
+        if ([legacyCommand isEqualToString:@"route-del"]) {
+            return requestActiveSession(daemonRPCMakeRequest(@"session.route.del", @{@"entries": request[@"entries"] ?: @[]}));
+        }
+        if ([legacyCommand isEqualToString:@"route-clear"]) {
+            return requestActiveSession(daemonRPCMakeRequest(@"session.route.clear", @{}));
+        }
+        return requestActiveSession(daemonRPCMakeRequest(@"session.route.sync", rpcPayload));
     }, ^NSString* {
-        return currentSessionStateBridge();
+        return daemonStateSessionStatus();
     }, ^NSDictionary* {
         return routeListPayload();
     }, ^NSDictionary* (BOOL ok, NSString* message, NSDictionary* payload) {
@@ -451,65 +530,95 @@ static NSDictionary* handleRouteCommand(NSArray<NSString*>* arguments) {
     });
 }
 
-static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments) {
-    return tunCommandServiceHandle(arguments, ^BOOL {
-        return isExternalFDSession();
-    }, ^NSDictionary* (BOOL ok, NSString* message, NSDictionary* payload) {
+static NSDictionary* handleDaemonCommand(NSArray<NSString*>* arguments) {
+    if (arguments.count >= 2 && [arguments[1] isEqualToString:@"stop"]) {
+        NSDictionary* response = requestDaemonSession(daemonRPCMakeRequest(@"daemon.stop", @{}), NULL);
+        if ([response[@"ok"] boolValue]) {
+            return makeResponse(YES, @"Daemon stopped.", buildDaemonStatusResponsePayload(nil));
+        }
+        return response;
+    }
+    if (arguments.count >= 2 && [arguments[1] isEqualToString:@"status"]) {
+        NSDictionary* response = requestDaemonSession(daemonRPCMakeRequest(@"session.status", @{}), NULL);
+        if ([response[@"ok"] boolValue]) {
+            return makeResponse(YES, @"Daemon status.", buildDaemonStatusResponsePayload(response));
+        }
+        return makeResponse(YES, @"Daemon status.", buildDaemonStatusResponsePayload(nil));
+    }
+    return daemonServiceHandleCommand(arguments, ^NSDictionary* (BOOL ok, NSString* message, NSDictionary* payload) {
         return makeResponse(ok, message, payload);
-    }, ^NSDictionary* {
-        return tunStatusPayload();
-    }, ^NSDictionary* (NSString* tunName, int sendSocketFD) {
-        return allocateTunFDSession(tunName, sendSocketFD);
-    }, ^BOOL (NSString* tunName, NSString** errorMessage) {
-        return activateExternalTunSession(tunName, errorMessage);
-    }, ^NSDictionary* (NSString* tunName) {
-        return deactivateExternalTunSession(tunName);
-    }, ^NSDictionary* (NSDictionary* request) {
-        return requestActiveSession(request);
-    }, ^{
-        syncRuntimeSessionFromBackupBridge();
-    }, ^NSString* {
-        return currentSessionStateBridge();
-    }, ^NSDictionary* {
-        return stopTunSession();
-    }, ^BOOL (int localProxyPort, NSString** errorMessage) {
-        return setupTunSession(localProxyPort, errorMessage);
     }, ^BOOL (NSString** errorMessage) {
         return startControlSocketServer(&controlServerSocketFD, errorMessage);
-    }, ^NSDictionary* (NSString* errorMessage) {
-        NSMutableDictionary* backup = loadRouteBackup();
-        updateRouteBackupState(backup, ROUTE_BACKUP_STATE_ACTIVE, @"");
-        resetTunRuntimeStateBridge(backup, ROUTE_BACKUP_STATE_IDLE, @"");
-        releaseTunSessionLock();
-        return makeResponse(NO, errorMessage ?: @"Failed to start tun control socket.", nil);
+    }, ^{
+        controlSocketAcceptLoop(controlServerSocketFD, &runLoopMark, ^NSDictionary* (NSDictionary* request, int* responseFDOut) {
+            return processServerRequest(request, responseFDOut);
+        });
     }, ^NSDictionary* {
-        NSDictionary* syncResponse = syncActiveWhitelistWithEntries(storeEntries(), YES, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, &activeWhitelistRoutes, activeTunName, ^NSDictionary* (NSString* state, NSString* lastError) {
-            return updateBackupForActiveRoutes(state, lastError);
-        });
-        if (![syncResponse[@"ok"] boolValue]) {
-            NSMutableDictionary* backup = loadRouteBackup();
-            updateRouteBackupState(backup, ROUTE_BACKUP_STATE_ACTIVE, syncResponse[@"message"] ?: @"whitelist sync failed");
-        }
-        return syncResponse;
+        return daemonEnvelopeStatusPayload();
     }, ^{
-        controlSocketAcceptLoop(controlServerSocketFD, &runLoopMark, ^NSDictionary* (NSDictionary* request) {
-            return processServerRequest(request);
-        });
-    }, ^{
-        releaseTunSessionLock();
+        resetDaemonRuntimeState();
     });
 }
 
-static BOOL isExternalFDSession(void) {
-    return [currentSessionType() isEqualToString:SESSION_TYPE_EXTERNAL_FD];
+static NSDictionary* handleTunCleanupCommand(void) {
+    NSMutableArray<NSString*>* removed = [[NSMutableArray alloc] init];
+    NSString* socketPath = helperControlSocketPath();
+    NSString* lockPath = helperTunSessionLockPath();
+    if (access([socketPath fileSystemRepresentation], F_OK) == 0) {
+        unlink([socketPath fileSystemRepresentation]);
+        [removed addObject:socketPath];
+    }
+    if (access([lockPath fileSystemRepresentation], F_OK) == 0) {
+        unlink([lockPath fileSystemRepresentation]);
+        [removed addObject:lockPath];
+    }
+    NSURL* backupURL = helperRouteBackupFileURL();
+    if (backupURL != nil && access([[backupURL path] fileSystemRepresentation], F_OK) == 0) {
+        unlink([[backupURL path] fileSystemRepresentation]);
+        [removed addObject:[backupURL path]];
+    }
+    return makeResponse(YES, @"Tun cleanup completed.", @{@"removed": removed});
+}
+
+static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments) {
+    if (arguments.count >= 2 && [arguments[1] isEqualToString:@"cleanup"]) {
+        return handleTunCleanupCommand();
+    }
+    if (arguments.count >= 2 && [arguments[1] isEqualToString:@"status"]) {
+        NSDictionary* daemonResponse = requestDaemonSession(daemonRPCMakeRequest(@"session.status", @{}), NULL);
+        if ([daemonResponse[@"ok"] boolValue]) {
+            return buildTunStatusResponsePayload(daemonResponse);
+        }
+        return buildTunDiagnosticStatusResponse();
+    }
+    return tunCommandServiceHandle(arguments, ^NSDictionary* (BOOL ok, NSString* message, NSDictionary* payload) {
+        return makeResponse(ok, message, payload);
+    }, ^NSDictionary* {
+        return buildTunDiagnosticStatusResponse();
+    }, ^NSDictionary* (int localProxyPort) {
+        return requestDaemonSession(daemonRPCMakeRequest(@"session.start_embedded", @{@"socksPort": @(localProxyPort)}), NULL);
+    }, ^NSDictionary* (NSString* preferredTunName, int* receivedFDOut) {
+        NSMutableDictionary* payload = [[NSMutableDictionary alloc] init];
+        if (preferredTunName.length > 0) {
+            payload[@"preferredTunName"] = preferredTunName;
+        }
+        return requestDaemonSession(daemonRPCMakeRequest(@"session.allocate_fd", payload), receivedFDOut);
+    }, ^NSDictionary* (NSString* leaseId) {
+        NSMutableDictionary* payload = [[NSMutableDictionary alloc] init];
+        if (leaseId.length > 0) {
+            payload[@"leaseId"] = leaseId;
+        }
+        return requestDaemonSession(daemonRPCMakeRequest(@"session.activate", payload), NULL);
+    }, ^NSDictionary* {
+        return requestDaemonSession(daemonRPCMakeRequest(@"session.stop", @{}), NULL);
+    });
 }
 
 static BOOL setupTunSession(int localProxyPort, NSString** errorMessage) {
     if (!acquireTunSessionLock(errorMessage)) {
         return NO;
     }
-    syncRuntimeSessionFromBackupBridge();
-    if (![currentSessionStateBridge() isEqualToString:@"inactive"]) {
+    if (![daemonStateSessionStatus() isEqualToString:@"inactive"]) {
         if (errorMessage != NULL) {
             *errorMessage = @"A tun session is already active.";
         }
@@ -560,12 +669,11 @@ static BOOL setupTunSession(int localProxyPort, NSString** errorMessage) {
     return YES;
 }
 
-static BOOL activateExternalTunSession(NSString* tunName, NSString** errorMessage) {
+static BOOL activateAllocatedTunLease(NSString* tunName, NSString** errorMessage) {
     if (!acquireTunSessionLock(errorMessage)) {
         return NO;
     }
-    syncRuntimeSessionFromBackupBridge();
-    if (![currentSessionStateBridge() isEqualToString:@"inactive"]) {
+    if (![daemonStateSessionStatus() isEqualToString:@"inactive"]) {
         if (errorMessage != NULL) {
             *errorMessage = @"A tun session is already active.";
         }
@@ -629,6 +737,11 @@ static void cleanupHandle(int signal_ns) {
     (void)signal_ns;
     if ([runtimeMode isEqualToString:@"tun"]) {
         stopTunSession();
+    }
+    if (controlServerSocketFD != -1) {
+        close(controlServerSocketFD);
+        controlServerSocketFD = -1;
+        unlink([helperControlSocketPath() fileSystemRepresentation]);
     }
     releaseTunSessionLock();
     runLoopMark = NO;
@@ -706,6 +819,12 @@ int main(int argc, const char * argv[])
                     BOOL ok = applySystemProxyMode(command, originalSets, localPort, httpPort);
                     response = makeResponse(ok, ok ? [NSString stringWithFormat:@"proxy set to %@", command] : [NSString stringWithFormat:@"failed to set proxy to %@", command], nil);
                 }
+            }
+        } else if ([command isEqualToString:@"daemon"]) {
+            runtimeMode = @"daemon";
+            response = handleDaemonCommand(arguments);
+            if (![response[@"ok"] boolValue]) {
+                exitCode = EXIT_SOCKET;
             }
         } else if ([command isEqualToString:@"tun"]) {
             runtimeMode = @"tun";

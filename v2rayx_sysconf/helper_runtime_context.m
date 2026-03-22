@@ -9,7 +9,7 @@ NSDictionary* helperRuntimeUpdateBackupForActiveRoutes(HelperRuntimeContext cont
 }
 
 void helperRuntimeSyncRuntimeSessionFromBackup(HelperRuntimeContext context) {
-    syncRuntimeSessionFromBackup(context.activeTunName, context.activeIPv4TakeoverRoutes, context.loadRouteBackupBlock);
+    (void)context;
 }
 
 BOOL helperRuntimeLoadDefaultRouteBaseline(HelperRuntimeContext context, NSString** errorMessage) {

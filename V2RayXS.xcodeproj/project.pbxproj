@@ -20,6 +20,9 @@
 		3483B900F00A10000000001B /* route_command_service.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A10000000001C /* route_command_service.m */; };
 		3483B900F00A10000000001F /* tun_command_service.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A100000000020 /* tun_command_service.m */; };
 		3483B900F00A100000000022 /* helper_runtime_context.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A100000000023 /* helper_runtime_context.m */; };
+		3483B900F00A100000000025 /* daemon_service.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A100000000026 /* daemon_service.m */; };
+		3483B900F00A100000000028 /* daemon_state.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A100000000029 /* daemon_state.m */; };
+		3483B900F00A10000000002A /* daemon_rpc.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A10000000002B /* daemon_rpc.m */; };
 		34AA955F299B5E7500E06D1B /* Tun2socks.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 34AA955E299B5E7500E06D1B /* Tun2socks.xcframework */; };
 		34BB19C9297A7A9600331407 /* tun_device.m in Sources */ = {isa = PBXBuildFile; fileRef = 34BB19C8297A7A9600331407 /* tun_device.m */; };
 		9504C07D1C662C3000352520 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 9504C07C1C662C3000352520 /* AppDelegate.m */; };
@@ -123,6 +126,12 @@
 		3483B900F00A10000000001D /* tun_session_controller.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = tun_session_controller.h; sourceTree = "<group>"; };
 		3483B900F00A10000000001C /* route_command_service.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = route_command_service.m; sourceTree = "<group>"; };
 		3483B900F00A10000000001E /* route_command_service.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = route_command_service.h; sourceTree = "<group>"; };
+		3483B900F00A100000000026 /* daemon_service.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = daemon_service.m; sourceTree = "<group>"; };
+		3483B900F00A100000000027 /* daemon_service.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = daemon_service.h; sourceTree = "<group>"; };
+		3483B900F00A100000000029 /* daemon_state.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = daemon_state.m; sourceTree = "<group>"; };
+		3483B900F00A10000000002C /* daemon_state.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = daemon_state.h; sourceTree = "<group>"; };
+		3483B900F00A10000000002B /* daemon_rpc.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = daemon_rpc.m; sourceTree = "<group>"; };
+		3483B900F00A10000000002D /* daemon_rpc.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = daemon_rpc.h; sourceTree = "<group>"; };
 		3483B900F00A100000000023 /* helper_runtime_context.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = helper_runtime_context.m; sourceTree = "<group>"; };
 		3483B900F00A100000000024 /* helper_runtime_context.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = helper_runtime_context.h; sourceTree = "<group>"; };
 		3483B900F00A100000000020 /* tun_command_service.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = tun_command_service.m; sourceTree = "<group>"; };
@@ -317,6 +326,12 @@
 			children = (
 				3483B900F00A100000000018 /* active_route_reconciler.h */,
 				3483B900F00A100000000017 /* active_route_reconciler.m */,
+				3483B900F00A10000000002D /* daemon_rpc.h */,
+				3483B900F00A10000000002B /* daemon_rpc.m */,
+				3483B900F00A100000000027 /* daemon_service.h */,
+				3483B900F00A100000000026 /* daemon_service.m */,
+				3483B900F00A10000000002C /* daemon_state.h */,
+				3483B900F00A100000000029 /* daemon_state.m */,
 				3483B900F00A100000000012 /* control_socket_transport.h */,
 				3483B900F00A10000000000F /* control_socket_transport.m */,
 				3483B900F00A100000000024 /* helper_runtime_context.h */,
@@ -653,6 +668,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				3483B900F00A100000000016 /* active_route_reconciler.m in Sources */,
+				3483B900F00A10000000002A /* daemon_rpc.m in Sources */,
+				3483B900F00A100000000025 /* daemon_service.m in Sources */,
+				3483B900F00A100000000028 /* daemon_state.m in Sources */,
 				34315F9E297DB3A9000DDA2D /* route_helper.m in Sources */,
 				3483B900F00A10000000000E /* control_socket_transport.m in Sources */,
 				3483B900F00A100000000022 /* helper_runtime_context.m in Sources */,

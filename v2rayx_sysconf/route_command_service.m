@@ -18,6 +18,16 @@ NSDictionary* routeCommandServiceHandle(NSArray<NSString*>* arguments,
                                         NSDictionary* (^routeListPayloadBlock)(void),
                                         NSDictionary* (^makeResponseBlock)(BOOL ok, NSString* message, NSDictionary* payload),
                                         NSDictionary* (^updateBackupForActiveRoutesBlock)(NSString* state, NSString* lastError)) {
+    (void)routeHelper;
+    (void)defaultRouteGatewayV4;
+    (void)defaultRouteGatewayV6;
+    (void)defaultRouteInterfaceV4;
+    (void)defaultRouteInterfaceV6;
+    (void)activeWhitelistRoutes;
+    (void)activeTunName;
+    (void)isExternalFDSessionValue;
+    (void)currentSessionStateBlock;
+    (void)updateBackupForActiveRoutesBlock;
     if (arguments.count < 2) {
         return makeResponseBlock(NO, @"Missing route subcommand.", nil);
     }
@@ -33,9 +43,6 @@ NSDictionary* routeCommandServiceHandle(NSArray<NSString*>* arguments,
         return makeResponseBlock(YES, @"Route whitelist entries.", routeListPayloadBlock());
     }
     if ([subcommand isEqualToString:@"apply"]) {
-        if (isExternalFDSessionValue) {
-            return syncActiveWhitelistWithEntries(storeEntries(), YES, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, activeWhitelistRoutes, activeTunName, updateBackupForActiveRoutesBlock);
-        }
         return requestActiveSessionBlock(@{@"cmd": @"route-sync", @"entries": storeEntries()});
     }
 
@@ -61,14 +68,6 @@ NSDictionary* routeCommandServiceHandle(NSArray<NSString*>* arguments,
     }
 
     if ([subcommand isEqualToString:@"add"]) {
-        if (isExternalFDSessionValue) {
-            NSDictionary* storeResponse = addEntriesToStore(entries);
-            if (![storeResponse[@"ok"] boolValue]) {
-                return storeResponse;
-            }
-            NSDictionary* activeResponse = syncActiveWhitelistWithEntries(storeEntries(), YES, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, activeWhitelistRoutes, activeTunName, updateBackupForActiveRoutesBlock);
-            return makeResponseBlock([activeResponse[@"ok"] boolValue], [activeResponse[@"ok"] boolValue] ? @"Routes added to whitelist store and active external session." : (activeResponse[@"message"] ?: @"Failed to apply routes to active external session."), @{@"persisted": storeResponse[@"persisted"] ?: @[], @"applied": activeResponse[@"applied"] ?: @[], @"pending": [activeResponse[@"ok"] boolValue] ? @[] : entries});
-        }
         if (requireActive) {
             NSDictionary* response = requestActiveSessionBlock(@{@"cmd": @"route-add", @"entries": entries});
             if (![response[@"ok"] boolValue] || !canTreatSessionAsActiveResponse(response)) {
@@ -85,14 +84,6 @@ NSDictionary* routeCommandServiceHandle(NSArray<NSString*>* arguments,
     }
 
     if ([subcommand isEqualToString:@"del"]) {
-        if (isExternalFDSessionValue) {
-            NSDictionary* storeResponse = removeEntriesFromStore(entries);
-            if (![storeResponse[@"ok"] boolValue]) {
-                return storeResponse;
-            }
-            NSDictionary* activeResponse = syncActiveWhitelistWithEntries(storeEntries(), YES, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, activeWhitelistRoutes, activeTunName, updateBackupForActiveRoutesBlock);
-            return makeResponseBlock([activeResponse[@"ok"] boolValue], [activeResponse[@"ok"] boolValue] ? @"Routes removed from whitelist store and active external session." : (activeResponse[@"message"] ?: @"Failed to reconcile active external whitelist."), @{@"removed": storeResponse[@"removed"] ?: @[], @"active": activeResponse[@"active"] ?: @[]});
-        }
         if (requireActive) {
             NSDictionary* response = requestActiveSessionBlock(@{@"cmd": @"route-del", @"entries": entries});
             if (![response[@"ok"] boolValue] || !canTreatSessionAsActiveResponse(response)) {
@@ -106,14 +97,6 @@ NSDictionary* routeCommandServiceHandle(NSArray<NSString*>* arguments,
     }
 
     if ([subcommand isEqualToString:@"clear"]) {
-        if (isExternalFDSessionValue) {
-            NSDictionary* storeResponse = clearStoreEntries();
-            if (![storeResponse[@"ok"] boolValue]) {
-                return storeResponse;
-            }
-            NSDictionary* activeResponse = syncActiveWhitelistWithEntries(@[], YES, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, activeWhitelistRoutes, activeTunName, updateBackupForActiveRoutesBlock);
-            return makeResponseBlock([activeResponse[@"ok"] boolValue], [activeResponse[@"ok"] boolValue] ? @"Route whitelist cleared from store and active external session." : (activeResponse[@"message"] ?: @"Failed to clear active external whitelist."), @{@"removed": storeResponse[@"removed"] ?: @[], @"active": activeResponse[@"active"] ?: @[]});
-        }
         if (requireActive) {
             NSDictionary* response = requestActiveSessionBlock(@{@"cmd": @"route-clear"});
             if (![response[@"ok"] boolValue] || !canTreatSessionAsActiveResponse(response)) {
@@ -127,13 +110,6 @@ NSDictionary* routeCommandServiceHandle(NSArray<NSString*>* arguments,
     }
 
     if ([subcommand isEqualToString:@"sync-file"]) {
-        if (isExternalFDSessionValue) {
-            if (!replaceStoreEntries(entries)) {
-                return makeResponseBlock(NO, @"Failed to update route whitelist store.", nil);
-            }
-            NSDictionary* activeResponse = syncActiveWhitelistWithEntries(entries, YES, routeHelper, defaultRouteGatewayV4, defaultRouteGatewayV6, defaultRouteInterfaceV4, defaultRouteInterfaceV6, activeWhitelistRoutes, activeTunName, updateBackupForActiveRoutesBlock);
-            return makeResponseBlock([activeResponse[@"ok"] boolValue], [activeResponse[@"ok"] boolValue] ? @"Route whitelist synchronized to store and active external session." : (activeResponse[@"message"] ?: @"Failed to synchronize active external whitelist."), @{@"entries": entries, @"applied": activeResponse[@"applied"] ?: @[], @"failed": activeResponse[@"failed"] ?: @[]});
-        }
         if (requireActive) {
             NSDictionary* response = requestActiveSessionBlock(@{@"cmd": @"route-sync", @"entries": entries});
             if (![response[@"ok"] boolValue] || !canTreatSessionAsActiveResponse(response)) {

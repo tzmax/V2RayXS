@@ -1,80 +1,67 @@
 #import <Foundation/Foundation.h>
+#import <unistd.h>
 #import "tun_command_service.h"
 
+static NSString* lastAllocatedLeaseIdentifier = nil;
+
 NSDictionary* tunCommandServiceHandle(NSArray<NSString*>* arguments,
-                                      BOOL (^isExternalFDSessionBlock)(void),
                                       NSDictionary* (^makeResponseBlock)(BOOL ok, NSString* message, NSDictionary* payload),
-                                      NSDictionary* (^tunStatusPayloadBlock)(void),
-                                      NSDictionary* (^allocateTunFDSessionBlock)(NSString* tunName, int sendSocketFD),
-                                      BOOL (^activateExternalTunSessionBlock)(NSString* tunName, NSString** errorMessage),
-                                      NSDictionary* (^deactivateExternalTunSessionBlock)(NSString* tunName),
-                                      NSDictionary* (^requestActiveSessionBlock)(NSDictionary* request),
-                                      void (^syncRuntimeSessionFromBackupBlock)(void),
-                                      NSString* (^currentSessionStateBlock)(void),
-                                      NSDictionary* (^stopTunSessionBlock)(void),
-                                      BOOL (^setupTunSessionBlock)(int localProxyPort, NSString** errorMessage),
-                                      BOOL (^startControlSocketServerBlock)(NSString** errorMessage),
-                                      NSDictionary* (^onStartSocketFailureBlock)(NSString* errorMessage),
-                                      NSDictionary* (^syncWhitelistAfterStartBlock)(void),
-                                      void (^runControlSocketLoopBlock)(void),
-                                      void (^releaseTunSessionLockBlock)(void)) {
+                                      NSDictionary* (^statusRequestBlock)(void),
+                                      NSDictionary* (^startEmbeddedRequestBlock)(int localProxyPort),
+                                      NSDictionary* (^allocateFDRequestBlock)(NSString* preferredTunName, int* receivedFDOut),
+                                      NSDictionary* (^activateLeaseRequestBlock)(NSString* leaseId),
+                                      NSDictionary* (^stopRequestBlock)(void)) {
     if (arguments.count < 2) {
         return makeResponseBlock(NO, @"Missing tun subcommand.", nil);
     }
     NSString* subcommand = arguments[1];
+    NSMutableArray<NSString*>* positionalArguments = [[NSMutableArray alloc] init];
+    for (NSUInteger index = 2; index < arguments.count; index++) {
+        NSString* argument = arguments[index];
+        if (![argument isEqualToString:@"--json"] && ![argument isEqualToString:@"--debug"]) {
+            [positionalArguments addObject:argument];
+        }
+    }
 
     if ([subcommand isEqualToString:@"status"]) {
-        return makeResponseBlock(YES, @"Tun session status.", tunStatusPayloadBlock());
+        return statusRequestBlock();
+    }
+
+    if ([subcommand isEqualToString:@"cleanup"]) {
+        return stopRequestBlock();
     }
 
     if ([subcommand isEqualToString:@"allocate"]) {
-        NSString* tunName = nil;
-        NSString* socketFDString = nil;
-        if (arguments.count >= 4) {
-            tunName = arguments[2];
-            socketFDString = arguments[3];
-        } else if (arguments.count >= 3) {
-            socketFDString = arguments[2];
+        NSString* preferredTunName = nil;
+        if (positionalArguments.count >= 1 && [positionalArguments[0] hasPrefix:@"utun"]) {
+            preferredTunName = positionalArguments[0];
         }
-        int sendSocketFD = -1;
-        if (socketFDString.length == 0 || sscanf([socketFDString UTF8String], "%d", &sendSocketFD) != 1 || sendSocketFD < 0) {
-            return makeResponseBlock(NO, @"Missing or invalid tun fd transport socket fd.", nil);
+        int receivedFD = -1;
+        NSDictionary* response = allocateFDRequestBlock(preferredTunName, &receivedFD);
+        if ([response[@"ok"] boolValue] && receivedFD >= 0) {
+            NSString* leaseId = response[@"leaseId"];
+            if ([leaseId isKindOfClass:[NSString class]] && leaseId.length > 0) {
+                lastAllocatedLeaseIdentifier = leaseId;
+            }
+            close(receivedFD);
         }
-        return allocateTunFDSessionBlock(tunName, sendSocketFD);
+        return response;
     }
 
     if ([subcommand isEqualToString:@"activate"]) {
-        if (arguments.count < 3) {
-            return makeResponseBlock(NO, @"Missing utun interface name for tun activate.", nil);
-        }
-        NSString* errorMessage = nil;
-        BOOL didActivate = activateExternalTunSessionBlock(arguments[2], &errorMessage);
-        return makeResponseBlock(didActivate, didActivate ? @"External tun session activated." : (errorMessage ?: @"Failed to activate external tun session."), didActivate ? tunStatusPayloadBlock() : nil);
+        NSString* leaseId = positionalArguments.count >= 1 ? positionalArguments[0] : lastAllocatedLeaseIdentifier;
+        return activateLeaseRequestBlock(leaseId);
     }
 
     if ([subcommand isEqualToString:@"deactivate"]) {
-        NSString* tunName = arguments.count >= 3 ? arguments[2] : nil;
-        return deactivateExternalTunSessionBlock(tunName);
+        return stopRequestBlock();
     }
 
     if ([subcommand isEqualToString:@"stop"]) {
-        if (isExternalFDSessionBlock()) {
-            return makeResponseBlock(NO, @"Use `tun deactivate` for external tun sessions.", nil);
-        }
-        NSDictionary* response = requestActiveSessionBlock(@{@"cmd": @"stop"});
-        if ([response[@"ok"] boolValue]) {
-            return response;
-        }
-        syncRuntimeSessionFromBackupBlock();
-        NSString* sessionState = currentSessionStateBlock();
-        if (![sessionState isEqualToString:@"inactive"]) {
-            return stopTunSessionBlock();
-        }
-        return makeResponseBlock(NO, response[@"message"] ?: @"No active tun session.", nil);
+        return stopRequestBlock();
     }
 
     if ([subcommand isEqualToString:@"start"]) {
-        NSString* errorMessage = nil;
         if (arguments.count < 3) {
             return makeResponseBlock(NO, @"Missing socks port for tun start.", nil);
         }
@@ -82,16 +69,7 @@ NSDictionary* tunCommandServiceHandle(NSArray<NSString*>* arguments,
         if (sscanf([arguments[2] UTF8String], "%i", &localProxyPort) != 1 || localProxyPort <= 0 || localProxyPort > 65535) {
             return makeResponseBlock(NO, @"Invalid socks port for tun start.", nil);
         }
-        if (!setupTunSessionBlock(localProxyPort, &errorMessage)) {
-            return makeResponseBlock(NO, errorMessage ?: @"Failed to start tun session.", nil);
-        }
-        if (!startControlSocketServerBlock(&errorMessage)) {
-            return onStartSocketFailureBlock(errorMessage ?: @"Failed to start tun control socket.");
-        }
-        syncWhitelistAfterStartBlock();
-        runControlSocketLoopBlock();
-        releaseTunSessionLockBlock();
-        return makeResponseBlock(YES, @"Tun session exited.", tunStatusPayloadBlock());
+        return startEmbeddedRequestBlock(localProxyPort);
     }
 
     return makeResponseBlock(NO, @"Unknown tun subcommand.", nil);

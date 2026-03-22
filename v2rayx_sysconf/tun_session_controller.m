@@ -175,23 +175,11 @@ NSString* tunSessionCurrentState(NSString* activeTunName,
                                  NSString* (^currentSessionOwnerBlock)(void),
                                  NSString* (^currentControlPlaneBlock)(void),
                                  NSMutableDictionary* (^loadRouteBackupBlock)(void)) {
-    NSMutableDictionary* backup = loadRouteBackupBlock != nil ? loadRouteBackupBlock() : loadRouteBackup();
-    NSString* state = activeTunName.length > 0 ? ROUTE_BACKUP_STATE_ACTIVE : backup[ROUTE_BACKUP_STATE_KEY];
-    NSString* backupTunName = backup[ROUTE_BACKUP_TUN_NAME_KEY];
-    NSArray* backupTakeoverRoutes = [backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] isKindOfClass:[NSArray class]] ? backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] : @[];
-    NSString* currentSessionTypeValue = currentSessionTypeBlock != nil ? currentSessionTypeBlock() : SESSION_TYPE_NONE;
-    NSString* currentSessionOwnerValue = currentSessionOwnerBlock != nil ? currentSessionOwnerBlock() : SESSION_OWNER_NONE;
-    NSString* currentControlPlaneValue = currentControlPlaneBlock != nil ? currentControlPlaneBlock() : CONTROL_PLANE_NONE;
-    if ((state.length == 0 || [state isEqualToString:ROUTE_BACKUP_STATE_IDLE]) && ![currentSessionTypeValue isEqualToString:SESSION_TYPE_NONE] && backupTakeoverRoutes.count > 0 && [backupTunName isKindOfClass:[NSString class]] && backupTunName.length > 0) {
-        state = ROUTE_BACKUP_STATE_ACTIVE;
-    }
-    if ([state isEqualToString:ROUTE_BACKUP_STATE_SWITCHING] && [currentSessionTypeValue isEqualToString:SESSION_TYPE_NONE] && [currentSessionOwnerValue isEqualToString:SESSION_OWNER_NONE] && [currentControlPlaneValue isEqualToString:CONTROL_PLANE_NONE] && backupTakeoverRoutes.count == 0) {
-        state = ROUTE_BACKUP_STATE_IDLE;
-    }
-    if (state.length == 0 || [state isEqualToString:ROUTE_BACKUP_STATE_IDLE]) {
-        return @"inactive";
-    }
-    return state;
+    (void)currentSessionTypeBlock;
+    (void)currentSessionOwnerBlock;
+    (void)currentControlPlaneBlock;
+    (void)loadRouteBackupBlock;
+    return activeTunName.length > 0 ? ROUTE_BACKUP_STATE_ACTIVE : @"inactive";
 }
 
 static BOOL isTunManagedIPv4Route(NSString* gateway, NSString* interfaceName, NSString* activeTunName, NSString* tunWg) {

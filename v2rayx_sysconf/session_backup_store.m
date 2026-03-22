@@ -88,25 +88,6 @@ NSMutableDictionary* sanitizeLegacyRouteBackup(NSMutableDictionary* backup) {
 }
 
 BOOL backupRepresentsRecoverableActiveSession(NSDictionary* backup) {
-    if (![backup isKindOfClass:[NSDictionary class]]) {
-        return NO;
-    }
-
-    NSString* state = [backup[ROUTE_BACKUP_STATE_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_STATE_KEY] : @"";
-    NSString* tunName = [backup[ROUTE_BACKUP_TUN_NAME_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_TUN_NAME_KEY] : @"";
-    NSString* sessionType = [backup[ROUTE_BACKUP_SESSION_TYPE_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_SESSION_TYPE_KEY] : SESSION_TYPE_NONE;
-    NSString* sessionOwner = [backup[ROUTE_BACKUP_SESSION_OWNER_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_SESSION_OWNER_KEY] : SESSION_OWNER_NONE;
-    NSString* controlPlane = [backup[ROUTE_BACKUP_CONTROL_PLANE_KEY] isKindOfClass:[NSString class]] ? backup[ROUTE_BACKUP_CONTROL_PLANE_KEY] : CONTROL_PLANE_NONE;
-    NSArray* takeoverRoutes = [backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] isKindOfClass:[NSArray class]] ? backup[ROUTE_BACKUP_IPV4_TAKEOVER_ROUTES_KEY] : @[];
-
-    if (tunName.length == 0) {
-        return NO;
-    }
-    if (takeoverRoutes.count > 0) {
-        return YES;
-    }
-    if (![sessionType isEqualToString:SESSION_TYPE_NONE] || ![sessionOwner isEqualToString:SESSION_OWNER_NONE] || ![controlPlane isEqualToString:CONTROL_PLANE_NONE]) {
-        return YES;
-    }
-    return [state isEqualToString:ROUTE_BACKUP_STATE_ACTIVE];
+    (void)backup;
+    return NO;
 }
