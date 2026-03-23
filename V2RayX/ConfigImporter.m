@@ -434,7 +434,7 @@
         streamSettings[@"security"] = @"tls";
         streamSettings[@"tlsSettings"][@"serverName"] = newProfile.address;
     }
-    newProfile.streamSettings = streamSettings;
+    newProfile.streamSettings = normalizedStreamSettingsForXray(streamSettings);
     return newProfile;
 }
 
@@ -598,7 +598,7 @@
         }
     }
     
-    newProfile.streamSettings = streamSettings;
+    newProfile.streamSettings = normalizedStreamSettingsForXray(streamSettings);
     return newProfile;
 }
 

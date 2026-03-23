@@ -151,7 +151,7 @@
 }
 
 - (NSMutableDictionary*)outboundProfile {
-    NSMutableDictionary* fullStreamSettings = [NSMutableDictionary dictionaryWithDictionary:streamSettings];
+    NSMutableDictionary* fullStreamSettings = normalizedStreamSettingsForXray(streamSettings);
     fullStreamSettings[@"network"] = NETWORK_LIST[network];
     NSDictionary* result =
     @{

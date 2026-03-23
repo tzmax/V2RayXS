@@ -18,3 +18,19 @@ NSUInteger searchInArray(NSString* str, NSArray* array) {
     }
     return 0;
 }
+
+NSMutableDictionary* normalizedStreamSettingsForXray(NSDictionary* streamSettings) {
+    NSMutableDictionary* normalized = [streamSettings isKindOfClass:[NSDictionary class]] ? [streamSettings mutableDeepCopy] : [[NSMutableDictionary alloc] init];
+
+    NSMutableDictionary* kcpSettings = [normalized[@"kcpSettings"] isKindOfClass:[NSDictionary class]] ? [normalized[@"kcpSettings"] mutableDeepCopy] : nil;
+    if (kcpSettings != nil) {
+        [kcpSettings removeObjectForKey:@"seed"];
+        NSMutableDictionary* kcpHeader = [kcpSettings[@"header"] isKindOfClass:[NSDictionary class]] ? [kcpSettings[@"header"] mutableDeepCopy] : nil;
+        NSString* headerType = [kcpHeader[@"type"] isKindOfClass:[NSString class]] ? kcpHeader[@"type"] : @"none";
+        [kcpSettings removeObjectForKey:@"header"];
+        kcpSettings[@"headerConfig"] = @{@"type": headerType.length > 0 ? headerType : @"none"};
+        normalized[@"kcpSettings"] = kcpSettings;
+    }
+
+    return normalized;
+}

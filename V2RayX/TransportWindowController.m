@@ -293,7 +293,7 @@
         [streamSettingsImmutable removeObjectForKey:@"realitySettings"];
     }
     
-    NSMutableDictionary *streamSettings = [streamSettingsImmutable mutableCopy];
+    NSMutableDictionary *streamSettings = normalizedStreamSettingsForXray(streamSettingsImmutable);
     if ([self->_tfoEnableButton state]) {
         streamSettings[@"sockopt"] = @{
                                       @"tcpFastOpen": @(YES)

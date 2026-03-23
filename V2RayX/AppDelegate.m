@@ -2227,10 +2227,22 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                                                      @"tag":@"balance",
                                                      @"selector": allProxyTags
                                                      }];
-        fullConfig[@"outbounds"] = allUniqueTagOutboundDict.allValues;
+        NSMutableArray* normalizedOutbounds = [[NSMutableArray alloc] init];
+        for (NSDictionary* outbound in allUniqueTagOutboundDict.allValues) {
+            NSMutableDictionary* normalizedOutbound = [outbound mutableDeepCopy];
+            normalizedOutbound[@"streamSettings"] = normalizedStreamSettingsForXray(outbound[@"streamSettings"]);
+            [normalizedOutbounds addObject:normalizedOutbound];
+        }
+        fullConfig[@"outbounds"] = normalizedOutbounds;
     } else {
         // otherwise, we convert all collected outbounds into an array
-        fullConfig[@"outbounds"] = configOutboundDict.allValues;
+        NSMutableArray* normalizedOutbounds = [[NSMutableArray alloc] init];
+        for (NSDictionary* outbound in configOutboundDict.allValues) {
+            NSMutableDictionary* normalizedOutbound = [outbound mutableDeepCopy];
+            normalizedOutbound[@"streamSettings"] = normalizedStreamSettingsForXray(outbound[@"streamSettings"]);
+            [normalizedOutbounds addObject:normalizedOutbound];
+        }
+        fullConfig[@"outbounds"] = normalizedOutbounds;
     }
     return fullConfig;
 }

@@ -44,6 +44,7 @@
 #define SUPPORTED_ROUTING (@[@"domain", @"ip", @"network", @"port", @"inboundTag", @"protocol"])
 
 NSUInteger searchInArray(NSString* str, NSArray* array);
+NSMutableDictionary* normalizedStreamSettingsForXray(NSDictionary* streamSettings);
 
 
 #endif /* utilities_h */
