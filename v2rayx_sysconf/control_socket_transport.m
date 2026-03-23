@@ -195,6 +195,6 @@ static BOOL sendJSONResponseWithOptionalFD(int clientFD, NSDictionary* response,
     cmsg->cmsg_type = SCM_RIGHTS;
     cmsg->cmsg_len = CMSG_LEN(sizeof(int));
     memcpy(CMSG_DATA(cmsg), &responseFD, sizeof(int));
-    msg.msg_controllen = cmsg->cmsg_len;
+    msg.msg_controllen = CMSG_SPACE(sizeof(int));
     return sendmsg(clientFD, &msg, 0) != -1;
 }

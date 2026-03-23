@@ -25,6 +25,7 @@
 		3483B900F00A10000000002A /* daemon_rpc.m in Sources */ = {isa = PBXBuildFile; fileRef = 3483B900F00A10000000002B /* daemon_rpc.m */; };
 		34AA955F299B5E7500E06D1B /* Tun2socks.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 34AA955E299B5E7500E06D1B /* Tun2socks.xcframework */; };
 		34BB19C9297A7A9600331407 /* tun_device.m in Sources */ = {isa = PBXBuildFile; fileRef = 34BB19C8297A7A9600331407 /* tun_device.m */; };
+		34CC00010000000000000001 /* HelperClient.m in Sources */ = {isa = PBXBuildFile; fileRef = 34CC00020000000000000001 /* HelperClient.m */; };
 		9504C07D1C662C3000352520 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 9504C07C1C662C3000352520 /* AppDelegate.m */; };
 		9504C0801C662C3000352520 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 9504C07F1C662C3000352520 /* main.m */; };
 		9504C0821C662C3000352520 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9504C0811C662C3000352520 /* Assets.xcassets */; };
@@ -141,6 +142,8 @@
 		34AA955E299B5E7500E06D1B /* Tun2socks.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Tun2socks.xcframework; path = Librarys/Tun2socks.xcframework; sourceTree = "<group>"; };
 		34BB19C8297A7A9600331407 /* tun_device.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = tun_device.m; sourceTree = "<group>"; };
 		34BB19CB297A8E6600331407 /* tun_device.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = tun_device.h; sourceTree = "<group>"; };
+		34CC00020000000000000001 /* HelperClient.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HelperClient.m; sourceTree = "<group>"; };
+		34CC00030000000000000001 /* HelperClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HelperClient.h; sourceTree = "<group>"; };
 		9504C0781C662C3000352520 /* V2RayXS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = V2RayXS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9504C07B1C662C3000352520 /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
 		9504C07C1C662C3000352520 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
@@ -274,6 +277,8 @@
 		9504C07A1C662C3000352520 /* V2RayX */ = {
 			isa = PBXGroup;
 			children = (
+				34CC00030000000000000001 /* HelperClient.h */,
+				34CC00020000000000000001 /* HelperClient.m */,
 				9DBF54CD221615AD00B61D55 /* NSData+AES256Encryption.h */,
 				9DBF54CE221615AD00B61D55 /* NSData+AES256Encryption.m */,
 				9577E1921C6B065D00093BD3 /* GCDWebServer */,
@@ -638,6 +643,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				34CC00010000000000000001 /* HelperClient.m in Sources */,
 				9DDC059621CA8EAD00C6C2D7 /* utilities.m in Sources */,
 				9504C0901C662CBF00352520 /* ConfigWindowController.m in Sources */,
 				9577E1B81C6B065E00093BD3 /* GCDWebServerFileRequest.m in Sources */,

@@ -185,7 +185,7 @@ BOOL sendFileDescriptor(int socketFD, int fileDescriptor, NSString* payload) {
     header->cmsg_type = SCM_RIGHTS;
     header->cmsg_len = CMSG_LEN(sizeof(int));
     *((int*)CMSG_DATA(header)) = fileDescriptor;
-    message.msg_controllen = header->cmsg_len;
+    message.msg_controllen = CMSG_SPACE(sizeof(int));
 
     return sendmsg(socketFD, &message, 0) >= 0;
 }

@@ -33,6 +33,7 @@
 #import "tun_session_controller.h"
 #import "route_whitelist_store.h"
 #import "control_socket_transport.h"
+#import "tun_device.h"
 #import <stdarg.h>
 
 #define INFO "v2rayx_sysconf\nusage:\n  v2rayx_sysconf -v\n  v2rayx_sysconf off [--debug]\n  v2rayx_sysconf auto [--debug]\n  v2rayx_sysconf global <socksPort> <httpPort> [--debug]\n  v2rayx_sysconf save [--debug]\n  v2rayx_sysconf restore [--debug]\n  v2rayx_sysconf daemon run [--debug]\n  v2rayx_sysconf daemon status [--json] [--debug]\n  v2rayx_sysconf daemon stop [--json] [--debug]\n  v2rayx_sysconf tun start <socksPort> [--json] [--debug]\n  v2rayx_sysconf tun allocate [<utunName>] [--json] [--debug]\n  v2rayx_sysconf tun activate [<leaseId>] [--json] [--debug]\n  v2rayx_sysconf tun deactivate [--json] [--debug]\n  v2rayx_sysconf tun stop [--json] [--debug]\n  v2rayx_sysconf tun status [--json] [--debug]\n  v2rayx_sysconf tun cleanup [--json] [--debug]\n  v2rayx_sysconf route add <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route del <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route list [--json] [--debug]\n  v2rayx_sysconf route clear [--json] [--require-active] [--debug]\n  v2rayx_sysconf route apply [--json] [--debug]\n  v2rayx_sysconf route sync-file <path> [--json] [--require-active] [--debug]\n"

@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <unistd.h>
 #import "tun_command_service.h"
+#import "tun_device.h"
 
 static NSString* lastAllocatedLeaseIdentifier = nil;
 
@@ -33,8 +34,14 @@ NSDictionary* tunCommandServiceHandle(NSArray<NSString*>* arguments,
 
     if ([subcommand isEqualToString:@"allocate"]) {
         NSString* preferredTunName = nil;
+        int transportSocketFD = -1;
         if (positionalArguments.count >= 1 && [positionalArguments[0] hasPrefix:@"utun"]) {
             preferredTunName = positionalArguments[0];
+        }
+        if (positionalArguments.count >= 1 && ![positionalArguments[0] hasPrefix:@"utun"]) {
+            transportSocketFD = [positionalArguments[0] intValue];
+        } else if (positionalArguments.count >= 2) {
+            transportSocketFD = [positionalArguments[1] intValue];
         }
         int receivedFD = -1;
         NSDictionary* response = allocateFDRequestBlock(preferredTunName, &receivedFD);
@@ -42,6 +49,11 @@ NSDictionary* tunCommandServiceHandle(NSArray<NSString*>* arguments,
             NSString* leaseId = response[@"leaseId"];
             if ([leaseId isKindOfClass:[NSString class]] && leaseId.length > 0) {
                 lastAllocatedLeaseIdentifier = leaseId;
+            }
+            if (transportSocketFD >= 0) {
+                NSData* responseData = [NSJSONSerialization dataWithJSONObject:response options:0 error:nil];
+                NSString* payloadText = [[NSString alloc] initWithData:responseData encoding:NSUTF8StringEncoding] ?: @"{}";
+                sendFileDescriptor(transportSocketFD, receivedFD, payloadText);
             }
             close(receivedFD);
         }

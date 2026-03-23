@@ -9,6 +9,7 @@
 #import <Cocoa/Cocoa.h>
 #import "sysconf_version.h"
 #import "utilities.h"
+#import "HelperClient.h"
 #define kV2RayXHelper @"/Library/Application Support/V2RayXS/v2rayx_sysconf"
 #define kV2RayXSettingVersion 4
 
@@ -75,7 +76,6 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 
 - (BOOL)helperBinaryIsHealthy:(NSString**)errorMessage;
 - (void)presentHelperFailureAlert:(NSString*)message;
-- (BOOL)runHelperCommand:(NSArray*)arguments action:(NSString*)action;
 - (BOOL)installHelperBinary:(NSString**)errorMessage;
 - (NSString*)appleScriptStringLiteral:(NSString*)value;
 - (BOOL)helperBinaryAtPathIsHealthy:(NSString*)helperPath error:(NSString**)errorMessage;
@@ -98,6 +98,7 @@ int runCommandLine(NSString* launchPath, NSArray* arguments);
 - (NSString*)availableUtunName;
 - (BOOL)shouldMaintainTunRoutingSession;
 - (BOOL)hasActiveTunRoutingSession;
+- (NSDictionary*)currentTunRoutingSessionStatus;
 - (void)probeTunRoutingSessionState;
 - (void)stopTunRoutingSession;
 - (void)refreshTunRoutingSession;
