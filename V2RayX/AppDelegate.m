@@ -69,6 +69,9 @@ typedef struct {
     FSEventStreamRef fsEventStream;
     BOOL suppressAutomaticTunRefreshDuringCoreConfigChange;
     HelperClient* helperClient;
+    NSString* lastPresentedHelperFailureKey;
+    NSDate* lastPresentedHelperFailureAt;
+    BOOL helperFailureAlertVisible;
     
     NSData* v2rayJSONconfig;
 }
@@ -90,20 +93,22 @@ typedef struct {
 - (void)applyStatusTransitionFromEnabled:(BOOL)previousEnabled toEnabled:(BOOL)nextEnabled startupRestore:(BOOL)isStartupRestore;
 - (void)applyModeChangeFromSender:(id)sender userInitiated:(BOOL)isUserInitiated;
 - (void)applyModeTransitionFrom:(ProxyMode)previousMode to:(ProxyMode)nextMode userInitiated:(BOOL)isUserInitiated sender:(id)sender;
+- (void)applyRuntimeTargetEnabled:(BOOL)targetEnabled mode:(ProxyMode)targetMode startupRestore:(BOOL)isStartupRestore;
 - (void)applyNonTunModeTransitionFrom:(ProxyMode)previousMode to:(ProxyMode)nextMode userInitiated:(BOOL)isUserInitiated sender:(id)sender applyNetworkMode:(BOOL)applyNetworkMode;
-- (void)runAutomationModeTransitionIfNeeded;
+- (void)applyAutomationTargetIfNeeded;
 - (NSMenuItem*)menuItemForAutomationMode:(NSString*)modeName;
-- (void)runAutomationStatusTransitionIfNeeded;
 - (void)ensureCoreLogDirectoryExists;
 - (NSString*)currentTunSessionState;
 - (NSString*)currentTunInterfaceName;
 - (BOOL)shouldTreatTunSessionAsActive;
-- (NSString*)currentTunLastError;
-- (NSString*)currentTunDiagnosticsSummary;
 - (NSString*)tunStatusDisplayText;
 - (void)reconcileTunSessionForCurrentRuntime;
 - (void)handleWorkspaceDidWake:(NSNotification*)notification;
 - (void)activateXrayTunLeaseAfterCoreSpawn:(NSDictionary*)xrayTunFDContext;
+- (void)reportHelperFailureMessage:(NSString*)message;
+- (BOOL)isUsingXrayTunMode;
+- (void)applyNonXrayNetworkMode;
+- (void)stopEmbeddedTunSessionIfNeeded;
 
 @end
 
@@ -151,6 +156,17 @@ static NSArray* helperArgumentsWithOptionalDebug(NSArray* arguments) {
         return arguments;
     }
     return [arguments arrayByAddingObject:@"--debug"];
+}
+
+static BOOL helperArgumentsManageTunSession(NSArray* arguments) {
+    if (arguments.count == 0 || ![arguments[0] isEqual:@"tun"]) {
+        return NO;
+    }
+    if (arguments.count < 2) {
+        return NO;
+    }
+    NSString* subcommand = arguments[1];
+    return [subcommand isEqual:@"start"] || [subcommand isEqual:@"activate"] || [subcommand isEqual:@"stop"] || [subcommand isEqual:@"status"] || [subcommand isEqual:@"deactivate"];
 }
 
 static char** buildSpawnCStringArray(NSArray<NSString*>* components) {
@@ -379,7 +395,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                 if (xrayTunFDContext == nil) {
                     NSLog(@"%@", tunFDError ?: @"Failed to prepare tun fd for Xray.");
                     helperTunSessionActive = NO;
-                    [self presentHelperFailureAlert:tunFDError ?: @"Failed to prepare tun fd for Xray."];
+                    [self reportHelperFailureMessage:tunFDError ?: @"Failed to prepare tun fd for Xray."];
                     continue;
                 }
                 NSString* actualTunName = xrayTunFDContext[@"tunName"];
@@ -418,7 +434,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                 }
                 NSString* message = [NSString stringWithFormat:@"Failed to start Xray (spawn error %d).", spawnError];
                 NSLog(@"%@", message);
-                [self presentHelperFailureAlert:message];
+                [self reportHelperFailureMessage:message];
                 continue;
             }
             appDebugLog(@"coreLoop spawned pid=%d mode=%ld tunFD=%d tunName=%@", self->coreProcessPID, (long)self->proxyMode, self->coreTunFD, xrayTunFDContext[@"tunName"] ?: @"");
@@ -785,12 +801,35 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
 - (void)presentHelperFailureAlert:(NSString*)message {
     dispatch_async(dispatch_get_main_queue(), ^{
+        NSString* rawMessage = [message isKindOfClass:[NSString class]] ? message : @"Unknown helper failure.";
+        NSString* normalizedMessage = [rawMessage stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (normalizedMessage.length == 0) {
+            normalizedMessage = @"Unknown helper failure.";
+        }
+        NSString* alertKey = [NSString stringWithFormat:@"helper:%@", normalizedMessage];
+        NSDate* now = [NSDate date];
+        if (self->helperFailureAlertVisible) {
+            appDebugLog(@"suppress helper failure alert while modal visible: %@", normalizedMessage);
+            return;
+        }
+        if ([self->lastPresentedHelperFailureKey isEqualToString:alertKey] && self->lastPresentedHelperFailureAt != nil && [now timeIntervalSinceDate:self->lastPresentedHelperFailureAt] < 15.0) {
+            appDebugLog(@"suppress duplicate helper failure alert: %@", normalizedMessage);
+            return;
+        }
+        self->helperFailureAlertVisible = YES;
+        self->lastPresentedHelperFailureKey = alertKey;
+        self->lastPresentedHelperFailureAt = now;
         NSAlert* alert = [[NSAlert alloc] init];
         alert.messageText = @"V2RayXS helper failed";
-        alert.informativeText = message;
+        alert.informativeText = normalizedMessage;
         [alert addButtonWithTitle:@"OK"];
         [alert runModal];
+        self->helperFailureAlertVisible = NO;
     });
+}
+
+- (void)reportHelperFailureMessage:(NSString*)message {
+    [self presentHelperFailureAlert:message];
 }
 
 - (NSString*)currentHelperIssueMessage {
@@ -952,43 +991,17 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     return ![[self currentTunSessionState] isEqualToString:@"inactive"];
 }
 
-- (NSString*)currentTunLastError {
-    NSDictionary* status = [self currentTunRoutingSessionStatus];
-    NSString* lastError = [status[@"lastError"] isKindOfClass:[NSString class]] ? status[@"lastError"] : nil;
-    if (lastError.length > 0) {
-        return lastError;
-    }
-    NSDictionary* history = [status[@"history"] isKindOfClass:[NSDictionary class]] ? status[@"history"] : nil;
-    NSString* historicalError = [history[@"lastError"] isKindOfClass:[NSString class]] ? history[@"lastError"] : nil;
-    return historicalError.length > 0 ? historicalError : nil;
-}
-
-- (NSString*)currentTunDiagnosticsSummary {
-    NSDictionary* status = [self currentTunRoutingSessionStatus];
-    NSDictionary* diagnostics = [status[@"diagnostics"] isKindOfClass:[NSDictionary class]] ? status[@"diagnostics"] : nil;
-    if (diagnostics.count == 0) {
-        return nil;
-    }
-    NSMutableArray<NSString*>* parts = [[NSMutableArray alloc] init];
-    if ([diagnostics[@"staleSocket"] boolValue]) {
-        [parts addObject:@"stale socket"]; 
-    }
-    if ([diagnostics[@"staleLock"] boolValue]) {
-        [parts addObject:@"stale lock"]; 
-    }
-    NSNumber* historicalBackup = [diagnostics[@"historicalBackup"] isKindOfClass:[NSNumber class]] ? diagnostics[@"historicalBackup"] : nil;
-    if (historicalBackup != nil && historicalBackup.integerValue > 0) {
-        [parts addObject:[NSString stringWithFormat:@"historical backup=%ld", (long)historicalBackup.integerValue]];
-    }
-    return parts.count > 0 ? [parts componentsJoinedByString:@", "] : nil;
-}
-
 - (NSString*)tunStatusDisplayText {
+    NSDictionary* status = [self currentTunRoutingSessionStatus];
     NSString* sessionState = [self currentTunSessionState];
     NSString* tunName = [self currentTunInterfaceName];
     NSString* leaseId = [self currentTunLeaseIdentifier];
-    NSString* lastError = [self currentTunLastError];
-    NSString* diagnostics = [self currentTunDiagnosticsSummary];
+    NSString* lastError = [status[@"lastError"] isKindOfClass:[NSString class]] ? status[@"lastError"] : nil;
+    if (lastError.length == 0) {
+        NSDictionary* history = [status[@"history"] isKindOfClass:[NSDictionary class]] ? status[@"history"] : nil;
+        lastError = [history[@"lastError"] isKindOfClass:[NSString class]] ? history[@"lastError"] : nil;
+    }
+    NSDictionary* diagnostics = [status[@"diagnostics"] isKindOfClass:[NSDictionary class]] ? status[@"diagnostics"] : nil;
 
     NSMutableArray<NSString*>* parts = [[NSMutableArray alloc] init];
     [parts addObject:[NSString stringWithFormat:@"tun: %@", sessionState]];
@@ -1001,8 +1014,21 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     if (lastError.length > 0) {
         [parts addObject:[NSString stringWithFormat:@"error=%@", lastError]];
     }
-    if (diagnostics.length > 0) {
-        [parts addObject:[NSString stringWithFormat:@"diag=%@", diagnostics]];
+    if ([diagnostics isKindOfClass:[NSDictionary class]] && diagnostics.count > 0) {
+        NSMutableArray<NSString*>* diagnosticParts = [[NSMutableArray alloc] init];
+        if ([diagnostics[@"staleSocket"] boolValue]) {
+            [diagnosticParts addObject:@"stale socket"];
+        }
+        if ([diagnostics[@"staleLock"] boolValue]) {
+            [diagnosticParts addObject:@"stale lock"];
+        }
+        NSNumber* historicalBackup = [diagnostics[@"historicalBackup"] isKindOfClass:[NSNumber class]] ? diagnostics[@"historicalBackup"] : nil;
+        if (historicalBackup != nil && historicalBackup.integerValue > 0) {
+            [diagnosticParts addObject:[NSString stringWithFormat:@"historical backup=%ld", (long)historicalBackup.integerValue]];
+        }
+        if (diagnosticParts.count > 0) {
+            [parts addObject:[NSString stringWithFormat:@"diag=%@", [diagnosticParts componentsJoinedByString:@", "]]];
+        }
     }
     return [parts componentsJoinedByString:@" | "];
 }
@@ -1060,6 +1086,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
         if ([helperResponse isKindOfClass:[NSDictionary class]]) {
             NSDictionary* statusPayload = [helperResponse[@"status"] isKindOfClass:[NSDictionary class]] ? helperResponse[@"status"] : helperResponse;
             [self updateTunRoutingSessionStatusFromPayload:statusPayload];
+            [self syncTunWhitelistRoutes];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self updateMenus];
             });
@@ -1086,6 +1113,72 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     } else {
         [helperClient clearRouteWhitelistWithAction:@"clear tun whitelist routes"];
     }
+}
+
+- (BOOL)isUsingXrayTunMode {
+    return self.proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun];
+}
+
+- (void)stopEmbeddedTunSessionIfNeeded {
+    if (helperApplicationTask != NULL && [helperApplicationTask isRunning]) {
+        [self stopTunRoutingSession];
+    }
+}
+
+- (void)applyNonXrayNetworkMode {
+    NSArray* arguments = nil;
+    if (proxyMode == manualMode) {
+        arguments = @[@"-v"];
+    } else if (proxyMode == pacMode) {
+        arguments = @[@"auto"];
+    } else {
+        NSInteger cusHttpPort = 0;
+        NSInteger cusSocksPort = 0;
+        if(useMultipleServer || !useCusProfile) {
+            arguments = @[@"global", [NSString stringWithFormat:@"%ld", localPort], [NSString stringWithFormat:@"%ld", httpPort]];
+        } else {
+            NSDictionary* cusJson = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]] options:0 error:nil];
+            if (cusJson[@"inboundDetour"] != nil && [cusJson[@"inboundDetour"] isKindOfClass:[NSArray class]]) {
+                for (NSDictionary *inboundDetour in cusJson[@"inboundDetour"]) {
+                    if ([inboundDetour[@"protocol"] isEqualToString:@"http"]) {
+                        cusHttpPort = [inboundDetour[@"port"] integerValue];
+                    }
+                    if ([inboundDetour[@"protocol"] isEqualToString:@"socks"]) {
+                        cusSocksPort = [inboundDetour[@"port"] integerValue];
+                    }
+                }
+            }
+            if ([cusJson[@"inbound"][@"protocol"] isEqualToString:@"http"]) {
+                cusHttpPort = [cusJson[@"inbound"][@"port"] integerValue];
+            }
+            if ([cusJson[@"inbound"][@"protocol"] isEqualToString:@"socks"]) {
+                cusSocksPort = [cusJson[@"inbound"][@"port"] integerValue];
+            }
+            NSLog(@"socks: %ld, http: %ld", cusSocksPort, cusHttpPort);
+            arguments = @[@"global", [NSString stringWithFormat:@"%ld", cusSocksPort], [NSString stringWithFormat:@"%ld", cusHttpPort]];
+        }
+    }
+
+    dispatch_async(taskQueue, ^{
+        HelperClient* client = self->helperClient;
+        BOOL shouldPreDisableProxy = (self.proxyMode == pacMode) || (self.proxyMode == tunMode && ![self isUsingXrayTunMode]);
+        if (shouldPreDisableProxy) {
+            NSString* action = self.proxyMode == pacMode ? @"disable system proxy before PAC refresh" : @"disable system proxy before enabling tun mode";
+            [client disableSystemProxyWithAction:action];
+        }
+        if (self.proxyMode == tunMode) {
+            [self syncTunWhitelistRoutes];
+        }
+        appDebugLog(@"applyNonXrayNetworkMode running helper args=%@", [arguments componentsJoinedByString:@" "]);
+        NSDictionary* helperResponse = self.proxyMode == tunMode ? [client startEmbeddedTunWithLocalPort:self->localPort action:@"apply helper network settings"] : [client runJSONCommandWithArguments:arguments action:@"apply helper network settings"];
+        if ([helperResponse isKindOfClass:[NSDictionary class]]) {
+            NSDictionary* statusPayload = [helperResponse[@"status"] isKindOfClass:[NSDictionary class]] ? helperResponse[@"status"] : helperResponse;
+            [self updateTunRoutingSessionStatusFromPayload:statusPayload];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self updateMenus];
+            });
+        }
+    });
 }
 
 - (BOOL)shouldMaintainTunRoutingSession {
@@ -1118,6 +1211,14 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     dispatch_sync(taskQueue, ^{
         closeHelperApplicationTask();
     });
+    [self stopHelperDaemonIfRunning];
+}
+
+- (void)stopHelperDaemonIfRunning {
+    NSDictionary* status = [helperClient helperDaemonStatusWithAction:@"check daemon before stop"];
+    if ([[status objectForKey:@"daemon"] isEqualToString:@"available"]) {
+        [helperClient stopHelperDaemonWithAction:@"stop helper daemon"];
+    }
 }
 
 - (void)refreshTunRoutingSession {
@@ -1400,6 +1501,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
     [self unloadV2ray];
     [self stopTunRoutingSession];
+    [self stopHelperDaemonIfRunning];
     //stop monitor pac
     if (dispatchPacSource) {
         dispatch_source_cancel(dispatchPacSource);
@@ -1483,8 +1585,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
     [self updateMenus];
     [self updatePacMenuList];
-    [self runAutomationStatusTransitionIfNeeded];
-    [self runAutomationModeTransitionIfNeeded];
+    [self applyAutomationTargetIfNeeded];
 }
 
 - (RuntimeState)currentRuntimeState {
@@ -1553,20 +1654,72 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     }
 }
 
-- (void)runAutomationStatusTransitionIfNeeded {
+- (void)applyAutomationTargetIfNeeded {
     NSArray<NSString*>* arguments = [[NSProcessInfo processInfo] arguments];
-    NSUInteger optionIndex = [arguments indexOfObject:@"--automation-status"];
-    if (optionIndex == NSNotFound || optionIndex + 1 >= arguments.count) {
+    NSUInteger statusIndex = [arguments indexOfObject:@"--automation-status"];
+    NSUInteger modeIndex = [arguments indexOfObject:@"--automation-mode"];
+    BOOL hasTargetStatus = statusIndex != NSNotFound && statusIndex + 1 < arguments.count;
+    BOOL hasTargetMode = modeIndex != NSNotFound && modeIndex + 1 < arguments.count;
+    if (!hasTargetStatus && !hasTargetMode) {
         return;
     }
-    NSString* statusValue = arguments[optionIndex + 1];
-    BOOL targetEnabled = ![statusValue isEqualToString:@"off"];
-    if (proxyState == targetEnabled) {
+
+    BOOL targetEnabled = proxyState;
+    if (hasTargetStatus) {
+        NSString* statusValue = arguments[statusIndex + 1];
+        targetEnabled = ![statusValue isEqualToString:@"off"];
+    }
+
+    ProxyMode targetMode = proxyMode;
+    if (hasTargetMode) {
+        NSMenuItem* targetModeItem = [self menuItemForAutomationMode:arguments[modeIndex + 1]];
+        if (targetModeItem != nil) {
+            targetMode = (ProxyMode)targetModeItem.tag;
+        }
+    }
+
+    if (proxyState == targetEnabled && proxyMode == targetMode) {
         return;
     }
+
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self didChangeStatus:self->_enableV2rayItem];
+        [self applyRuntimeTargetEnabled:targetEnabled mode:targetMode startupRestore:NO];
     });
+}
+
+- (void)applyRuntimeTargetEnabled:(BOOL)targetEnabled mode:(ProxyMode)targetMode startupRestore:(BOOL)isStartupRestore {
+    [self reconcileTunSessionForCurrentRuntime];
+    BOOL previousEnabled = proxyState;
+    ProxyMode previousMode = proxyMode;
+    if (previousEnabled == targetEnabled && previousMode == targetMode) {
+        [self updateMenus];
+        [self updatePacMenuList];
+        return;
+    }
+
+    if (previousEnabled && !targetEnabled) {
+        proxyState = NO;
+        [self applyStatusTransitionFromEnabled:previousEnabled toEnabled:NO startupRestore:isStartupRestore];
+        proxyMode = targetMode;
+        [self updateMenus];
+        [self updatePacMenuList];
+        return;
+    }
+
+    if (!previousEnabled && targetEnabled) {
+        proxyMode = targetMode;
+        proxyState = YES;
+        [self applyStatusTransitionFromEnabled:NO toEnabled:YES startupRestore:isStartupRestore];
+        [self updateMenus];
+        [self updatePacMenuList];
+        return;
+    }
+
+    if (previousMode != targetMode) {
+        [self applyModeTransitionFrom:previousMode to:targetMode userInitiated:NO sender:self];
+    }
+    [self updateMenus];
+    [self updatePacMenuList];
 }
 
 - (NSMenuItem*)menuItemForAutomationMode:(NSString*)modeName {
@@ -1583,22 +1736,6 @@ static int normalizedExitCodeFromWaitStatus(int status) {
         return _tunModeItem;
     }
     return nil;
-}
-
-- (void)runAutomationModeTransitionIfNeeded {
-    NSArray<NSString*>* arguments = [[NSProcessInfo processInfo] arguments];
-    NSUInteger optionIndex = [arguments indexOfObject:@"--automation-mode"];
-    if (optionIndex == NSNotFound || optionIndex + 1 >= arguments.count) {
-        return;
-    }
-    NSString* modeName = arguments[optionIndex + 1];
-    NSMenuItem* modeItem = [self menuItemForAutomationMode:modeName];
-    if (modeItem == nil || modeItem.tag == proxyMode) {
-        return;
-    }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self didChangeMode:modeItem];
-    });
 }
 
 - (void)applyStatusChangeFromSender:(id)sender startupRestore:(BOOL)isStartupRestore {
@@ -1679,6 +1816,9 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
     if (proxyState == true && !plan.previousModeIsTun && plan.nextModeIsTun) {
         appDebugLog(@"modeTransition nonTun->tun begin previous=%ld next=%ld", (long)previousMode, (long)nextMode);
+        if (isUserInitiated && previousMode == manualMode) {
+            [self backupSystemProxy];
+        }
         proxyMode = nextMode;
         [self setCurrentTunLeaseIdentifier:nil];
         [self updateMenus];
@@ -1688,10 +1828,15 @@ static int normalizedExitCodeFromWaitStatus(int status) {
         suppressAutomaticTunRefreshDuringCoreConfigChange = YES;
         [self coreConfigDidChange:self];
         suppressAutomaticTunRefreshDuringCoreConfigChange = NO;
+        BOOL shouldUseXrayTun = self.useXrayTun && [self currentCoreSupportsXrayTun];
         NSString* tunName = [self currentTunInterfaceName];
-        BOOL sawTunBeforeRefresh = [self waitForTunInterfaceNamed:tunName timeout:1.0];
-        appDebugLog(@"modeTransition nonTun->tun after coreConfig tunName=%@ exists=%d corePID=%d", tunName ?: @"", sawTunBeforeRefresh, coreProcessPID);
-        [self refreshTunRoutingSession];
+        BOOL sawTunAfterCoreConfig = [self waitForTunInterfaceNamed:tunName timeout:1.0];
+        appDebugLog(@"modeTransition nonTun->tun after coreConfig tunName=%@ exists=%d corePID=%d useXrayTun=%d", tunName ?: @"", sawTunAfterCoreConfig, coreProcessPID, shouldUseXrayTun);
+        if (!shouldUseXrayTun) {
+            [self refreshTunRoutingSession];
+        } else {
+            appDebugLog(@"modeTransition nonTun->tun defer refresh until post-spawn activation");
+        }
         return;
     }
 
@@ -1716,7 +1861,12 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     }
     if (proxyState == true) {
         if (proxyMode == tunMode) {
-            [self refreshTunRoutingSession];
+            BOOL shouldUseXrayTun = self.useXrayTun && [self currentCoreSupportsXrayTun];
+            if (!shouldUseXrayTun) {
+                [self refreshTunRoutingSession];
+            } else {
+                appDebugLog(@"applyModeTransition fallback skip refresh for Xray tun");
+            }
         } else {
             [self updateSystemProxy];
         }
@@ -1742,23 +1892,14 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 - (void)updateMenus {
-    NSString* tunStatusText = [self tunStatusDisplayText];
     if (proxyState) {
-        if (proxyMode == tunMode) {
-            [_v2rayStatusItem setTitle:[NSString stringWithFormat:@"xray-core: loaded (%@)", tunStatusText]];
-        } else {
-            [_v2rayStatusItem setTitle:@"xray-core: loaded"];
-        }
+        [_v2rayStatusItem setTitle:@"xray-core: loaded"];
         [_enableV2rayItem setTitle:@"Unload core"];
         NSImage *icon = [NSImage imageNamed:@"statusBarIcon"];
         [icon setTemplate:YES];
         [_statusBarItem setImage:icon];
     } else {
-        if ([self shouldTreatTunSessionAsActive]) {
-            [_v2rayStatusItem setTitle:[NSString stringWithFormat:@"xray-core: unloaded (%@)", tunStatusText]];
-        } else {
-            [_v2rayStatusItem setTitle:@"xray-core: unloaded"];
-        }
+        [_v2rayStatusItem setTitle:@"xray-core: unloaded"];
         [_enableV2rayItem setTitle:@"Load core"];
         [_statusBarItem setImage:[NSImage imageNamed:@"statusBarIcon_disabled"]];
     }
@@ -1822,106 +1963,39 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 -(void)updateSystemProxy {
-    NSArray *arguments;
-    BOOL shouldUseXrayTun = proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun];
+    BOOL shouldUseXrayTun = [self isUsingXrayTunMode];
     BOOL shouldRestartTunRoutingSession = [self shouldMaintainTunRoutingSession];
     NSString* currentLeaseId = [self currentTunLeaseIdentifier];
     NSString* currentSessionState = [self currentTunSessionState];
     BOOL hasHelperSession = [self shouldTreatTunSessionAsActive];
     if (shouldRestartTunRoutingSession) {
-        [self stopTunRoutingSession];
-    }
-    
-    if (proxyState) {
-        if (proxyMode == manualMode) { // manualMode mode
-            arguments = @[@"-v"]; // do nothing
-        } else if (proxyMode == pacMode) { // pac mode
-            arguments = @[@"auto"];
+        if (shouldUseXrayTun) {
+            [self stopEmbeddedTunSessionIfNeeded];
         } else {
-            NSInteger cusHttpPort = 0;
-            NSInteger cusSocksPort = 0;
-            
-            // global mode
-            if(useMultipleServer || !useCusProfile) {
-                arguments = @[@"global", [NSString stringWithFormat:@"%ld", localPort], [NSString stringWithFormat:@"%ld", httpPort]];
-            } else {
-                NSDictionary* cusJson = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]] options:0 error:nil];
-                if (cusJson[@"inboundDetour"] != nil && [cusJson[@"inboundDetour"] isKindOfClass:[NSArray class]]) {
-                    for (NSDictionary *inboundDetour in cusJson[@"inboundDetour"]) {
-                        if ([inboundDetour[@"protocol"] isEqualToString:@"http"]) {
-                            cusHttpPort = [inboundDetour[@"port"] integerValue];
-                        }
-                        if ([inboundDetour[@"protocol"] isEqualToString:@"socks"]) {
-                            cusSocksPort = [inboundDetour[@"port"] integerValue];
-                        }
-                    }
-                }
-                if ([cusJson[@"inbound"][@"protocol"] isEqualToString:@"http"]) {
-                    cusHttpPort = [cusJson[@"inbound"][@"port"] integerValue];
-                }
-                if ([cusJson[@"inbound"][@"protocol"] isEqualToString:@"socks"]) {
-                    cusSocksPort = [cusJson[@"inbound"][@"port"] integerValue];
-                }
-                NSLog(@"socks: %ld, http: %ld", cusSocksPort, cusHttpPort);
-                arguments = @[@"global", [NSString stringWithFormat:@"%ld", cusSocksPort], [NSString stringWithFormat:@"%ld", cusHttpPort]];
-            }
-            
-            // tun mode
-            if(proxyMode == tunMode) {
-                if (shouldUseXrayTun) {
-                    arguments = nil;
-                } else {
-                    arguments = @[@"tun", @"start", [NSString stringWithFormat:@"%ld", localPort]];
-                }
-            }
-            
+            [self stopTunRoutingSession];
         }
-        
-        dispatch_async(taskQueue, ^{
-            HelperClient* client = self->helperClient;
-            BOOL shouldPreDisableProxy = (self.proxyMode == pacMode) || (self.proxyMode == tunMode && !shouldUseXrayTun);
-            if (shouldPreDisableProxy) {
-                // close system proxy first to refresh pac file
-                NSString* action = self.proxyMode == pacMode ? @"disable system proxy before PAC refresh" : @"disable system proxy before enabling tun mode";
-                [client disableSystemProxyWithAction:action];
-            }
-            if (self.proxyMode == tunMode) {
-                [self syncTunWhitelistRoutes];
-            }
-            if (self.proxyMode == tunMode && shouldUseXrayTun) {
-                appDebugLog(@"updateSystemProxy defer Xray tun activation to post-spawn path session=%@ lease=%@ helperActive=%d", currentSessionState, currentLeaseId ?: @"", hasHelperSession);
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self updateMenus];
-                });
-                return;
-            }
-            appDebugLog(@"updateSystemProxy running helper args=%@", [arguments componentsJoinedByString:@" "]);
-            NSDictionary* helperResponse = nil;
-            if (self.proxyMode == tunMode) {
-                helperResponse = [client startEmbeddedTunWithLocalPort:self->localPort action:@"apply helper network settings"];
-            } else {
-                helperResponse = [client runJSONCommandWithArguments:arguments action:@"apply helper network settings"];
-            }
-            if ([helperResponse isKindOfClass:[NSDictionary class]]) {
-                NSDictionary* statusPayload = [helperResponse[@"status"] isKindOfClass:[NSDictionary class]] ? helperResponse[@"status"] : helperResponse;
-                [self updateTunRoutingSessionStatusFromPayload:statusPayload];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self updateMenus];
-                });
-            } else if (self.proxyMode == tunMode) {
-                NSString* statusText = [self tunStatusDisplayText];
-                if (statusText.length > 0) {
-                    appDebugLog(@"updateSystemProxy helper response missing status=%@", statusText);
-                }
-            }
-        });
-    } else {
+    }
+    if (!proxyState) {
         dispatch_async(taskQueue, ^{
             [self->helperClient disableSystemProxyWithAction:@"disable system proxy"];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self updateMenus];
             });
         });
+        NSLog(@"system proxy state:%@,%ld",proxyState?@"on":@"off", (long)proxyMode);
+        return;
+    }
+    
+    if (shouldUseXrayTun) {
+        dispatch_async(taskQueue, ^{
+            [self syncTunWhitelistRoutes];
+            appDebugLog(@"updateSystemProxy defer Xray tun activation to post-spawn path session=%@ lease=%@ helperActive=%d", currentSessionState, currentLeaseId ?: @"", hasHelperSession);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self updateMenus];
+            });
+        });
+    } else {
+        [self applyNonXrayNetworkMode];
     }
     NSLog(@"system proxy state:%@,%ld",proxyState?@"on":@"off", (long)proxyMode);
 }
@@ -2407,12 +2481,8 @@ NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments) {
     }
     
     // take notes helperApplicationTask
-    BOOL startsTunSession = arguments.count > 1 && [arguments[0] isEqual:@"tun"] && [arguments[1] isEqual:@"start"];
-    BOOL activatesExternalTunSession = arguments.count > 1 && [arguments[0] isEqual:@"tun"] && [arguments[1] isEqual:@"activate"];
-    BOOL talksToTunSession = (arguments.count > 1 && [arguments[0] isEqual:@"tun"] && ([arguments[1] isEqual:@"stop"] || [arguments[1] isEqual:@"status"] || [arguments[1] isEqual:@"deactivate"])) || (arguments.count > 0 && [arguments[0] isEqual:@"route"]);
-    if (!startsTunSession && !activatesExternalTunSession && !talksToTunSession) {
-        closeHelperApplicationTask();
-    }
+    BOOL startsTunSession = helperArgumentsManageTunSession(arguments) && arguments.count > 1 && [arguments[1] isEqual:@"start"];
+    BOOL activatesExternalTunSession = helperArgumentsManageTunSession(arguments) && arguments.count > 1 && [arguments[1] isEqual:@"activate"];
     if(helperApplicationTask == NULL && startsTunSession) {
         helperApplicationTask = task;
     }
@@ -2445,8 +2515,9 @@ NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments) {
     }
     [task waitUntilExit];
     if (startsTunSession || activatesExternalTunSession) {
-        helperTunSessionActive = (task.terminationStatus == 0 || task.terminationStatus == SIGTERM || task.terminationStatus == SIGINT);
-        if (!helperTunSessionActive) {
+        BOOL taskSucceeded = (task.terminationStatus == 0 || task.terminationStatus == SIGTERM || task.terminationStatus == SIGINT);
+        if (!taskSucceeded) {
+            helperTunSessionActive = NO;
             helperTunSessionStatus = nil;
         }
     }

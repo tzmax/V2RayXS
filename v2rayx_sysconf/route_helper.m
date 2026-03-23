@@ -29,6 +29,7 @@ static NSArray<NSString*>* routeArgumentsForScopedInterfaceAction(NSString* acti
 static NSString* normalizedIPAddress(NSString* ipAddress, SYSRouteAddressFamily family);
 static NSString* normalizedCIDRTarget(NSString* destinationCIDR, SYSRouteAddressFamily family, NSInteger* prefixLengthOut);
 static BOOL hasNetworkRouteToDestination(NSString* destinationCIDR, NSString* gateway, NSString* interfaceName, SYSRouteAddressFamily family);
+static BOOL hasExactNetworkRouteInTable(NSString* normalizedTarget, NSString* interfaceName, SYSRouteAddressFamily family);
 
 extern char **environ;
 
@@ -505,16 +506,16 @@ extern char **environ;
     if (destinationCIDR == NULL || interfaceName == NULL || interfaceName.length == 0) {
         return NO;
     }
-    if (hasNetworkRouteToDestination(destinationCIDR, nil, interfaceName, family)) {
-        return YES;
-    }
     NSInteger prefixLength = 0;
     NSString* normalizedTarget = normalizedCIDRTarget(destinationCIDR, family, &prefixLength);
     if (normalizedTarget == nil) {
         return NO;
     }
+    if (hasExactNetworkRouteInTable(normalizedTarget, interfaceName, family)) {
+        return YES;
+    }
     NSDictionary* taskResult = runTask(@"/sbin/route", routeArgumentsForInterfaceAction(@"add", normalizedTarget, interfaceName, family, NO));
-    if (!taskSucceeded(taskResult) && !hasNetworkRouteToDestination(destinationCIDR, nil, interfaceName, family)) {
+    if (!taskSucceeded(taskResult) && !hasExactNetworkRouteInTable(normalizedTarget, interfaceName, family)) {
         NSLog(@"Failed to add network route %@ via interface %@ (exit %@): %@", normalizedTarget, interfaceName, taskExitCode(taskResult), taskErrorOutput(taskResult));
         return NO;
     }
@@ -699,6 +700,64 @@ static BOOL hasNetworkRouteToDestination(NSString* destinationCIDR, NSString* ga
         return [currentInterface isEqualToString:interfaceName];
     }
     return currentGateway.length > 0 || currentInterface.length > 0;
+}
+
+static BOOL hasExactNetworkRouteInTable(NSString* normalizedTarget, NSString* interfaceName, SYSRouteAddressFamily family)
+{
+    if (normalizedTarget == nil || normalizedTarget.length == 0) {
+        return NO;
+    }
+
+    NSArray<NSString*>* cidrParts = [normalizedTarget componentsSeparatedByString:@"/"];
+    NSString* targetIP = cidrParts.count > 0 ? cidrParts[0] : normalizedTarget;
+    NSString* targetPrefix = cidrParts.count > 1 ? cidrParts[1] : @"";
+
+    NSMutableArray<NSString*>* arguments = [NSMutableArray arrayWithObjects:@"-rn", @"-f", family == SYSRouteAddressFamilyIPv6 ? @"inet6" : @"inet", nil];
+    NSDictionary* taskResult = runTask(@"/usr/sbin/netstat", arguments);
+    NSString* output = taskOutput(taskResult);
+    if (output.length == 0) {
+        return NO;
+    }
+
+    __block BOOL found = NO;
+    [output enumerateLinesUsingBlock:^(NSString * _Nonnull line, BOOL * _Nonnull stop) {
+        NSString* trimmedLine = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (trimmedLine.length == 0 || [trimmedLine hasPrefix:@"Routing tables"] || [trimmedLine hasPrefix:@"Internet"] || [trimmedLine hasPrefix:@"Destination"]) {
+            return;
+        }
+        NSArray<NSString*>* rawParts = [trimmedLine componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSMutableArray<NSString*>* parts = [[NSMutableArray alloc] init];
+        for (NSString* part in rawParts) {
+            if (part.length > 0) {
+                [parts addObject:part];
+            }
+        }
+        if (parts.count < 4) {
+            return;
+        }
+        NSString* destination = parts[0];
+        NSString* routeInterface = parts[parts.count - 1];
+        if (![routeInterface isEqualToString:interfaceName]) {
+            return;
+        }
+        if ([destination isEqualToString:normalizedTarget]) {
+            found = YES;
+            *stop = YES;
+            return;
+        }
+        NSArray<NSString*>* destParts = [destination componentsSeparatedByString:@"/"];
+        NSString* destIP = destParts.count > 0 ? destParts[0] : destination;
+        NSString* destPrefix = destParts.count > 1 ? destParts[1] : @"";
+        if ([destPrefix isEqualToString:targetPrefix]) {
+            NSString* expandedDestIP = normalizedIPAddress(destIP, family);
+            NSString* expandedTargetIP = normalizedIPAddress(targetIP, family);
+            if (expandedDestIP != nil && expandedTargetIP != nil && [expandedDestIP isEqualToString:expandedTargetIP]) {
+                found = YES;
+                *stop = YES;
+            }
+        }
+    }];
+    return found;
 }
 
 static NSArray<NSDictionary*>* parseDefaultRoutesFromNetstatOutput(NSString* output, SYSRouteAddressFamily family)

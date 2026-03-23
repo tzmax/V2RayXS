@@ -781,6 +781,7 @@ int main(int argc, const char * argv[])
     };
     signal(SIGABRT, cleanupHandle);
     signal(SIGINT, cleanupHandle);
+    signal(SIGTERM, cleanupHandle);
 
     @autoreleasepool {
         if (argc < 2) {

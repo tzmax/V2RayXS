@@ -63,5 +63,6 @@ else
     else
         echo -e "${RED}-- Build failed --${NORMAL}"
         echo -e "${RED}-- 编译失败 --${NORMAL}"
+        exit 1
     fi
 fi
