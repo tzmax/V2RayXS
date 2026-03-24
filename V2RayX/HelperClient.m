@@ -210,6 +210,26 @@ static NSDictionary* helperClientReceiveFileDescriptorAndPayload(int socketFD) {
     return YES;
 }
 
+- (BOOL)ensureDaemonIsRunning {
+    NSDictionary* daemonStatus = [self helperDaemonStatusWithAction:@"check helper daemon status"];
+    NSString* daemonState = [daemonStatus[@"daemon"] isKindOfClass:[NSString class]] ? daemonStatus[@"daemon"] : @"";
+    if ([daemonState isEqualToString:@"available"]) {
+        return YES;
+    }
+    if (![self runHelperDaemonWithAction:@"start helper daemon"]) {
+        return NO;
+    }
+    for (NSInteger attempt = 0; attempt < 10; attempt += 1) {
+        [NSThread sleepForTimeInterval:0.2];
+        NSDictionary* refreshedStatus = [self helperDaemonStatusWithAction:@"wait for helper daemon after startup"];
+        NSString* refreshedDaemonState = [refreshedStatus[@"daemon"] isKindOfClass:[NSString class]] ? refreshedStatus[@"daemon"] : @"";
+        if ([refreshedDaemonState isEqualToString:@"available"]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 - (NSDictionary*)helperDaemonStatusWithAction:(NSString*)action {
     return [self runJSONCommandWithArguments:@[@"daemon", @"status", @"--json"] action:action];
 }
@@ -219,34 +239,11 @@ static NSDictionary* helperClientReceiveFileDescriptorAndPayload(int socketFD) {
 }
 
 - (NSDictionary*)allocateTunFDWithPreferredName:(NSString*)preferredName error:(NSString* _Nullable __autoreleasing *)errorMessage {
-    NSDictionary* daemonStatus = [self helperDaemonStatusWithAction:@"check helper daemon status before tun allocation"];
-    NSString* daemonState = [daemonStatus[@"daemon"] isKindOfClass:[NSString class]] ? daemonStatus[@"daemon"] : @"";
-    if (![daemonState isEqualToString:@"available"]) {
-        BOOL daemonStarted = [self runHelperDaemonWithAction:@"start helper daemon for tun allocation"];
-        if (!daemonStarted) {
-            if (errorMessage != NULL) {
-                *errorMessage = @"Failed to start helper daemon for tun allocation.";
-            }
-            return nil;
+    if (![self ensureDaemonIsRunning]) {
+        if (errorMessage != NULL) {
+            *errorMessage = @"Failed to start helper daemon for tun allocation.";
         }
-
-        NSDictionary* refreshedStatus = nil;
-        for (NSInteger attempt = 0; attempt < 10; attempt += 1) {
-            [NSThread sleepForTimeInterval:0.2];
-            refreshedStatus = [self helperDaemonStatusWithAction:@"wait for helper daemon after startup"];
-            NSString* refreshedDaemonState = [refreshedStatus[@"daemon"] isKindOfClass:[NSString class]] ? refreshedStatus[@"daemon"] : @"";
-            if ([refreshedDaemonState isEqualToString:@"available"]) {
-                daemonStatus = refreshedStatus;
-                daemonState = refreshedDaemonState;
-                break;
-            }
-        }
-        if (![daemonState isEqualToString:@"available"]) {
-            if (errorMessage != NULL) {
-                *errorMessage = @"Helper daemon did not become available for tun allocation.";
-            }
-            return nil;
-        }
+        return nil;
     }
 
     int sockets[2] = {-1, -1};
@@ -315,6 +312,9 @@ static NSDictionary* helperClientReceiveFileDescriptorAndPayload(int socketFD) {
 }
 
 - (NSDictionary*)startEmbeddedTunWithLocalPort:(NSInteger)localPort action:(NSString*)action {
+    if (![self ensureDaemonIsRunning]) {
+        return nil;
+    }
     return [self runJSONCommandWithArguments:@[@"tun", @"start", [NSString stringWithFormat:@"%ld", (long)localPort]] action:action];
 }
 
