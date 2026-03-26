@@ -26,25 +26,12 @@
     
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSString* v2rayPath = [self.appDelegate getV2rayPath];
-        
-        NSTask *task = [[NSTask alloc] init];
-        if (@available(macOS 10.13, *)) {
-            [task setExecutableURL:[NSURL fileURLWithPath:v2rayPath]];
-        } else {
-            [task setLaunchPath:v2rayPath];
-        }
-        [task setArguments:@[@"-version"]];
-        NSPipe *stdoutpipe = [NSPipe pipe];
-        [task setStandardOutput:stdoutpipe];
-        [task launch];
-        [task waitUntilExit];
-        NSFileHandle *file = [stdoutpipe fileHandleForReading];
-        NSData *data = [file readDataToEndOfFile];
-        NSString *string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        NSDictionary* result = runCommandLineResult(v2rayPath, @[@"-version"]);
+        NSString* output = result[@"stdout"] ?: @"";
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self->_versionField setStringValue:[string componentsSeparatedByString:@"\n"][0]];
-             });
-        
+            NSString* firstLine = [output componentsSeparatedByString:@"\n"].firstObject ?: @"";
+            [self->_versionField setStringValue:firstLine];
+        });
     });
     
     [_protocolButton removeAllItems];

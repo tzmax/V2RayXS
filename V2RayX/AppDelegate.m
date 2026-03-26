@@ -18,6 +18,7 @@
 #import <sys/wait.h>
 #import <sys/socket.h>
 #import <sys/uio.h>
+#import <sys/event.h>
 #import <spawn.h>
 #import <fcntl.h>
 #import <netdb.h>
@@ -143,10 +144,6 @@ static void appDebugLog(NSString* format, ...) {
     NSLog(@"[debug] %@", message);
 }
 
-static NSFileHandle* nullInputHandle(void) {
-    return [NSFileHandle fileHandleWithNullDevice];
-}
-
 static BOOL shouldEnableHelperDebugLogging(void) {
     return [[[NSProcessInfo processInfo] arguments] containsObject:@"--debug"];
 }
@@ -237,6 +234,13 @@ static int spawnProcess(NSString* launchPath, NSArray<NSString*>* arguments, NSD
         }
     }
 
+    // Give the child clean fd 0/1/2 pointing to /dev/null.
+    // Must come AFTER tun fd mapping: tun maps to fd 3 (kXrayTunFDTarget),
+    // so addopen on fd 0/1/2 cannot conflict with the tun fd at fd 3.
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
@@ -247,6 +251,144 @@ static int spawnProcess(NSString* launchPath, NSArray<NSString*>* arguments, NSD
     freeSpawnCStringArray(argv);
     freeSpawnCStringArray(envp);
     return spawnError;
+}
+
+static NSDictionary* spawnSyncProcess(NSString* launchPath, NSArray<NSString*>* arguments, int stdinFD, void (^pidCallback)(pid_t pid)) {
+    if (launchPath.length == 0) {
+        return @{@"exitCode": @(-1), @"stdout": @"", @"stderr": @"spawnSyncProcess: empty launch path", @"pid": @(0)};
+    }
+
+    NSMutableArray<NSString*>* argvComponents = [[NSMutableArray alloc] init];
+    [argvComponents addObject:launchPath];
+    if (arguments.count > 0) {
+        [argvComponents addObjectsFromArray:arguments];
+    }
+    char** argv = buildSpawnCStringArray(argvComponents);
+    if (argv == NULL) {
+        return @{@"exitCode": @(-1), @"stdout": @"", @"stderr": @"spawnSyncProcess: failed to build argv", @"pid": @(0)};
+    }
+
+    int stdoutPipe[2] = {-1, -1};
+    int stderrPipe[2] = {-1, -1};
+    if (pipe(stdoutPipe) != 0 || pipe(stderrPipe) != 0) {
+        if (stdoutPipe[0] >= 0) { close(stdoutPipe[0]); close(stdoutPipe[1]); }
+        if (stderrPipe[0] >= 0) { close(stderrPipe[0]); close(stderrPipe[1]); }
+        freeSpawnCStringArray(argv);
+        return @{@"exitCode": @(-1), @"stdout": @"", @"stderr": @"spawnSyncProcess: pipe() failed", @"pid": @(0)};
+    }
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+
+    if (stdinFD >= 0) {
+        posix_spawn_file_actions_adddup2(&actions, stdinFD, STDIN_FILENO);
+        if (stdinFD != STDIN_FILENO) {
+            posix_spawn_file_actions_addclose(&actions, stdinFD);
+        }
+    } else {
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    }
+
+    posix_spawn_file_actions_adddup2(&actions, stdoutPipe[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addclose(&actions, stdoutPipe[0]);
+    posix_spawn_file_actions_addclose(&actions, stdoutPipe[1]);
+
+    posix_spawn_file_actions_adddup2(&actions, stderrPipe[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, stderrPipe[0]);
+    posix_spawn_file_actions_addclose(&actions, stderrPipe[1]);
+
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+
+    pid_t pid = 0;
+    int spawnError = posix_spawn(&pid, [launchPath fileSystemRepresentation], &actions, &attr, argv, environ);
+    posix_spawnattr_destroy(&attr);
+    posix_spawn_file_actions_destroy(&actions);
+    freeSpawnCStringArray(argv);
+
+    close(stdoutPipe[1]);
+    close(stderrPipe[1]);
+
+    if (spawnError != 0) {
+        close(stdoutPipe[0]);
+        close(stderrPipe[0]);
+        NSString* errorString = [NSString stringWithFormat:@"spawnSyncProcess: posix_spawn failed: %s (%d)", strerror(spawnError), spawnError];
+        return @{@"exitCode": @(-1), @"stdout": @"", @"stderr": errorString, @"pid": @(0)};
+    }
+
+    if (pidCallback != nil) {
+        pidCallback(pid);
+    }
+
+    NSMutableData* stdoutData = [[NSMutableData alloc] init];
+    NSMutableData* stderrData = [[NSMutableData alloc] init];
+    char buf[4096];
+    ssize_t n;
+
+    while ((n = read(stdoutPipe[0], buf, sizeof(buf))) > 0) {
+        [stdoutData appendBytes:buf length:n];
+    }
+    close(stdoutPipe[0]);
+
+    while ((n = read(stderrPipe[0], buf, sizeof(buf))) > 0) {
+        [stderrData appendBytes:buf length:n];
+    }
+    close(stderrPipe[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (WIFSIGNALED(status)) {
+        exitCode = WTERMSIG(status);
+    }
+
+    NSString* stdoutString = [[NSString alloc] initWithData:stdoutData encoding:NSUTF8StringEncoding] ?: @"";
+    NSString* stderrString = [[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] ?: @"";
+
+    return @{
+        @"exitCode": @(exitCode),
+        @"stdout": stdoutString,
+        @"stderr": stderrString,
+        @"pid": @(pid),
+    };
+}
+
+pid_t spawnDetachedProcess(NSString* launchPath, NSArray<NSString*>* arguments) {
+    if (launchPath.length == 0) {
+        return 0;
+    }
+
+    NSMutableArray<NSString*>* argvComponents = [[NSMutableArray alloc] init];
+    [argvComponents addObject:launchPath];
+    if (arguments.count > 0) {
+        [argvComponents addObjectsFromArray:arguments];
+    }
+    char** argv = buildSpawnCStringArray(argvComponents);
+    if (argv == NULL) {
+        return 0;
+    }
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+
+    pid_t pid = 0;
+    int spawnError = posix_spawn(&pid, [launchPath fileSystemRepresentation], &actions, &attr, argv, environ);
+    posix_spawnattr_destroy(&attr);
+    posix_spawn_file_actions_destroy(&actions);
+    freeSpawnCStringArray(argv);
+
+    if (spawnError != 0) {
+        return 0;
+    }
+    return pid;
 }
 
 static int waitForSpawnedProcess(pid_t pid, int* statusOut) {
@@ -266,25 +408,37 @@ static int terminateSpawnedProcess(pid_t pid, NSTimeInterval timeout, int* statu
         return 0;
     }
     kill(pid, SIGTERM);
-    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:MAX(timeout, 0)];
-    int status = 0;
-    while ([[NSDate date] compare:deadline] != NSOrderedDescending) {
-        pid_t waitResult = waitpid(pid, &status, WNOHANG);
-        if (waitResult == pid) {
-            if (statusOut != NULL) {
-                *statusOut = status;
-            }
-            return 0;
-        }
-        if (waitResult < 0 && errno == ECHILD) {
-            if (statusOut != NULL) {
-                *statusOut = 0;
-            }
-            return 0;
-        }
-        [NSThread sleepForTimeInterval:0.1];
+
+    int kq = kqueue();
+    if (kq < 0) {
+        kill(pid, SIGKILL);
+        return waitForSpawnedProcess(pid, statusOut);
     }
-    kill(pid, SIGKILL);
+
+    struct kevent change;
+    EV_SET(&change, pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
+
+    struct timespec ts;
+    ts.tv_sec = (time_t)timeout;
+    ts.tv_nsec = (long)((timeout - (time_t)timeout) * 1e9);
+
+    struct kevent event;
+    int nev = kevent(kq, &change, 1, &event, 1, &ts);
+    close(kq);
+
+    if (nev < 0 && errno == ESRCH) {
+        int status = 0;
+        pid_t wr = waitpid(pid, &status, WNOHANG);
+        if (wr == pid && statusOut != NULL) {
+            *statusOut = status;
+        }
+        return 0;
+    }
+
+    if (nev == 0) {
+        kill(pid, SIGKILL);
+    }
+
     return waitForSpawnedProcess(pid, statusOut);
 }
 
@@ -361,8 +515,8 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     };
     [self addObserver:self forKeyPath:@"selectedPacFileName" options:NSKeyValueObservingOptionNew context:nil];
     
-    // create a serial queue used for NSTask operations
-    taskQueue = dispatch_queue_create("cenmrev.v2rayxs.nstask", DISPATCH_QUEUE_CONCURRENT);
+    // create a concurrent queue used for helper/task operations
+    taskQueue = dispatch_queue_create("cenmrev.v2rayxs.task", DISPATCH_QUEUE_CONCURRENT);
     // create a loop to run core
     coreLoopSemaphore = dispatch_semaphore_create(0);
     coreLoopQueue = dispatch_queue_create("cenmrev.v2rayxs.coreloop", DISPATCH_QUEUE_SERIAL);
@@ -750,39 +904,23 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 - (NSString*)helperVersionAtPath:(NSString*)helperPath error:(NSString**)errorMessage {
-    NSTask* task = [[NSTask alloc] init];
-    if (@available(macOS 10.13, *)) {
-        [task setExecutableURL:[NSURL fileURLWithPath:helperPath]];
-    } else {
-        [task setLaunchPath:helperPath];
-    }
-    [task setArguments:@[@"-v"]];
+    NSDictionary* result = spawnSyncProcess(helperPath, @[@"-v"], -1, nil);
+    int exitCode = [result[@"exitCode"] intValue];
+    NSString* stdoutString = result[@"stdout"] ?: @"";
+    NSString* stderrString = result[@"stderr"] ?: @"";
 
-    NSPipe* stdoutPipe = [NSPipe pipe];
-    NSPipe* stderrPipe = [NSPipe pipe];
-    [task setStandardOutput:stdoutPipe];
-    [task setStandardError:stderrPipe];
-
-    @try {
-        [task launch];
-    } @catch (NSException *exception) {
+    if (exitCode == -1) {
         if (errorMessage != NULL) {
-            *errorMessage = exception.reason ?: @"Failed to launch helper for version check";
+            *errorMessage = stderrString.length > 0 ? stderrString : @"Failed to launch helper for version check";
         }
         return nil;
     }
 
-    NSData* stdoutData = [[stdoutPipe fileHandleForReading] readDataToEndOfFile];
-    NSData* stderrData = [[stderrPipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-
-    NSString* stdoutString = [[NSString alloc] initWithData:stdoutData encoding:NSUTF8StringEncoding] ?: @"";
-    NSString* stderrString = [[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] ?: @"";
-    if ([task terminationStatus] != 0) {
+    if (exitCode != 0) {
         if (errorMessage != NULL) {
             NSString* trimmedStderr = [stderrString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             if ([trimmedStderr isEqualToString:@""]) {
-                trimmedStderr = [NSString stringWithFormat:@"helper exited with code %d", [task terminationStatus]];
+                trimmedStderr = [NSString stringWithFormat:@"helper exited with code %d", exitCode];
             }
             *errorMessage = trimmedStderr;
         }
@@ -1128,7 +1266,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 - (void)stopEmbeddedTunSessionIfNeeded {
-    if (helperApplicationTask != NULL && [helperApplicationTask isRunning]) {
+    if (helperApplicationPID > 0 && kill(helperApplicationPID, 0) == 0) {
         [self stopTunRoutingSession];
     }
 }
@@ -1250,23 +1388,11 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 - (NSArray<NSString*>*)existingUtunInterfaces {
-    NSTask* task = [[NSTask alloc] init];
-    if (@available(macOS 10.13, *)) {
-        [task setExecutableURL:[NSURL fileURLWithPath:@"/sbin/ifconfig"]];
-    } else {
-        [task setLaunchPath:@"/sbin/ifconfig"];
-    }
-    NSPipe* stdoutPipe = [NSPipe pipe];
-    [task setStandardOutput:stdoutPipe];
-    [task setStandardInput:nullInputHandle()];
-    @try {
-        [task launch];
-        [task waitUntilExit];
-    } @catch (NSException *exception) {
+    NSDictionary* result = spawnSyncProcess(@"/sbin/ifconfig", @[], -1, nil);
+    if ([result[@"exitCode"] intValue] != 0) {
         return @[];
     }
-    NSData* data = [[stdoutPipe fileHandleForReading] readDataToEndOfFile];
-    NSString* output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+    NSString* output = result[@"stdout"] ?: @"";
     NSMutableArray<NSString*>* interfaces = [[NSMutableArray alloc] init];
     [output enumerateLinesUsingBlock:^(NSString * _Nonnull line, BOOL * _Nonnull stop) {
         NSRange colonRange = [line rangeOfString:@":"];
@@ -1506,11 +1632,64 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     });
 }
 
-- (void)applicationWillTerminate:(NSNotification *)aNotification {
-    [self unloadV2ray];
-    [self stopTunRoutingSession];
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    // Immediately hide the status bar item so the UI feels responsive.
+    [[NSStatusBar systemStatusBar] removeStatusItem:_statusBarItem];
+
+    // Do all cleanup in a background thread, then exit.
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        // Hard deadline: if cleanup takes too long, force exit.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            NSLog(@"V2RayXS termination cleanup timed out, forcing exit.");
+            _exit(0);
+        });
+
+        [self performTerminationCleanup];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp replyToApplicationShouldTerminate:YES];
+        });
+    });
+
+    return NSTerminateLater;
+}
+
+- (void)performTerminationCleanup {
+    // Send SIGTERM to xray immediately (don't block yet — let it die while we clean up tun).
+    if (coreProcessPID > 0) {
+        kill(coreProcessPID, SIGTERM);
+    }
+
+    // Clean up tun session directly (don't go through dispatch_sync to taskQueue).
+    closeHelperApplicationTask();
     [self stopHelperDaemonIfRunning];
-    //stop monitor pac
+
+    // Now wait for xray (it has been dying since the SIGTERM above).
+    if (coreProcessPID > 0) {
+        terminateSpawnedProcess(coreProcessPID, 2.0, &coreProcessStatus);
+        coreProcessPID = 0;
+    }
+    if (coreTunFD >= 0) {
+        close(coreTunFD);
+        coreTunFD = -1;
+    }
+    if (coreConfigPath.length > 0) {
+        [[NSFileManager defaultManager] removeItemAtPath:coreConfigPath error:nil];
+        coreConfigPath = nil;
+    }
+
+    // Turn off system proxy.
+    if (proxyState && proxyMode != manualMode) {
+        if (_enableRestore) {
+            [helperClient restoreSystemProxyWithAction:@"restore system proxy during termination"];
+        } else {
+            [helperClient disableSystemProxyWithAction:@"disable system proxy during termination"];
+        }
+    }
+}
+
+- (void)applicationWillTerminate:(NSNotification *)aNotification {
+    // Only fast, non-blocking operations here — heavy cleanup already done in performTerminationCleanup.
     if (dispatchPacSource) {
         dispatch_source_cancel(dispatchPacSource);
     }
@@ -1520,22 +1699,10 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     if (interruptSignalSource) {
         dispatch_source_cancel(interruptSignalSource);
     }
-    //unload v2ray
-    //runCommandLine(@"/bin/launchctl", @[@"unload", plistPath]);
-    [self unloadV2ray];
+
     NSLog(@"V2RayXS quiting, Xray core unloaded.");
-    //remove log file
     [[NSFileManager defaultManager] removeItemAtPath:logDirPath error:nil];
-    //save application status
     [self saveAppStatus];
-    //turn off proxy
-    if (proxyState && proxyMode != manualMode) {
-        if (_enableRestore) {
-            [helperClient restoreSystemProxyWithAction:@"restore system proxy during termination"];
-        } else {
-            [helperClient disableSystemProxyWithAction:@"disable system proxy during termination"];
-        }
-    }
 }
 
 - (IBAction)showHelp:(id)sender {
@@ -2197,7 +2364,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
 -(void)unloadV2ray {
     if (coreProcessPID > 0) {
-        terminateSpawnedProcess(coreProcessPID, 5.0, &coreProcessStatus);
+        terminateSpawnedProcess(coreProcessPID, 2.0, &coreProcessStatus);
         coreProcessPID = 0;
     }
     if (coreTunFD >= 0) {
@@ -2372,28 +2539,15 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     if (v2rayPath.length == 0) {
         return @"";
     }
-    NSTask *task = [[NSTask alloc] init];
-    if (@available(macOS 10.13, *)) {
-        [task setExecutableURL:[NSURL fileURLWithPath:v2rayPath]];
-    } else {
-        [task setLaunchPath:v2rayPath];
-    }
-    [task setArguments:@[@"-version"]];
-    NSPipe *stdoutpipe = [NSPipe pipe];
-    [task setStandardOutput:stdoutpipe];
-    [task setStandardInput:nullInputHandle()];
-    @try {
-        [task launch];
-        [task waitUntilExit];
-    } @catch (NSException *exception) {
+    NSDictionary* result = spawnSyncProcess(v2rayPath, @[@"-version"], -1, nil);
+    if ([result[@"exitCode"] intValue] != 0) {
         return @"";
     }
-    NSData *data = [[stdoutpipe fileHandleForReading] readDataToEndOfFile];
-    NSString *string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (string.length == 0) {
+    NSString* output = result[@"stdout"] ?: @"";
+    if (output.length == 0) {
         return @"";
     }
-    return [string componentsSeparatedByString:@"\n"].firstObject ?: @"";
+    return [output componentsSeparatedByString:@"\n"].firstObject ?: @"";
 }
 
 - (BOOL)currentCoreSupportsXrayTun {
@@ -2450,22 +2604,34 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 
-NSTask *helperApplicationTask;
+pid_t helperApplicationPID;
 
 void closeHelperApplicationTask(void) {
     HelperClient* client = activeHelperClient();
-    if(helperApplicationTask != NULL && [helperApplicationTask isRunning]) {
+    if(helperApplicationPID > 0 && kill(helperApplicationPID, 0) == 0) {
         NSDictionary* stopResponse = [client stopTunWithAction:@"stop helper tun session"];
         if (stopResponse == nil) {
-            [helperApplicationTask interrupt];
-            sleep(1);
-            [helperApplicationTask terminate];
+            kill(helperApplicationPID, SIGINT);
+            int kq = kqueue();
+            if (kq >= 0) {
+                struct kevent change;
+                EV_SET(&change, helperApplicationPID, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
+                struct timespec ts = { .tv_sec = 0, .tv_nsec = 500000000 };
+                struct kevent event;
+                int nev = kevent(kq, &change, 1, &event, 1, &ts);
+                close(kq);
+                if (nev == 0 && kill(helperApplicationPID, 0) == 0) {
+                    kill(helperApplicationPID, SIGTERM);
+                }
+            } else if (kill(helperApplicationPID, 0) == 0) {
+                kill(helperApplicationPID, SIGTERM);
+            }
         } else {
             helperTunSessionActive = NO;
             helperTunSessionStatus = nil;
             [[NSUserDefaults standardUserDefaults] removeObjectForKey:kStoredTunLeaseIdKey];
         }
-        helperApplicationTask = NULL;
+        helperApplicationPID = 0;
         return;
     }
     if (appDelegate != nil && ![appDelegate shouldTreatTunSessionAsActive]) {
@@ -2483,84 +2649,51 @@ void closeHelperApplicationTask(void) {
 }
 
 NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments) {
-    NSTask *task = [[NSTask alloc] init];
     if ([launchPath isEqualToString:kV2RayXHelper]) {
         arguments = helperArgumentsWithOptionalDebug(arguments);
     }
-    
-    // take notes helperApplicationTask
+
     BOOL startsTunSession = helperArgumentsManageTunSession(arguments) && arguments.count > 1 && [arguments[1] isEqual:@"start"];
     BOOL activatesExternalTunSession = helperArgumentsManageTunSession(arguments) && arguments.count > 1 && [arguments[1] isEqual:@"activate"];
-    if(helperApplicationTask == NULL && startsTunSession) {
-        helperApplicationTask = task;
+
+    NSDictionary* result = spawnSyncProcess(launchPath, arguments, -1,
+        (startsTunSession && helperApplicationPID == 0) ? ^(pid_t pid) {
+            helperApplicationPID = pid;
+        } : nil);
+
+    NSString* stdoutString = result[@"stdout"] ?: @"";
+    NSString* stderrString = result[@"stderr"] ?: @"";
+    if (stdoutString.length > 0) {
+        NSLog(@"%@", stdoutString);
     }
-    [task setLaunchPath:launchPath];
-    [task setArguments:arguments];
-    NSPipe *stdoutpipe = [NSPipe pipe];
-    [task setStandardOutput:stdoutpipe];
-    NSPipe *stderrpipe = [NSPipe pipe];
-    [task setStandardError:stderrpipe];
-    [task setStandardInput:nullInputHandle()];
-    NSFileHandle *file;
-    NSString *stdoutString = @"";
-    NSString *stderrString = @"";
-    file = [stdoutpipe fileHandleForReading];
-    [task launch];
-    NSData *data;
-    data = [file readDataToEndOfFile];
-    NSString *string;
-    string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    stdoutString = string ?: @"";
-    if (string.length > 0) {
-        NSLog(@"%@", string);
+    if (stderrString.length > 0) {
+        NSLog(@"%@", stderrString);
     }
-    file = [stderrpipe fileHandleForReading];
-    data = [file readDataToEndOfFile];
-    string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    stderrString = string ?: @"";
-    if (string.length > 0) {
-        NSLog(@"%@", string);
-    }
-    [task waitUntilExit];
+
+    int exitCode = [result[@"exitCode"] intValue];
     if (startsTunSession || activatesExternalTunSession) {
-        BOOL taskSucceeded = (task.terminationStatus == 0 || task.terminationStatus == SIGTERM || task.terminationStatus == SIGINT);
+        BOOL taskSucceeded = (exitCode == 0 || exitCode == SIGTERM || exitCode == SIGINT);
         if (!taskSucceeded) {
             helperTunSessionActive = NO;
             helperTunSessionStatus = nil;
         }
     }
     return @{
-        @"exitCode": @(task.terminationStatus),
+        @"exitCode": @(exitCode),
         @"stdout": stdoutString,
         @"stderr": stderrString,
     };
 }
 
-NSDictionary* runCommandLineResultWithSetup(NSString* launchPath, NSArray* arguments, void (^setupTask)(NSTask* task)) {
-    NSTask *task = [[NSTask alloc] init];
+NSDictionary* runCommandLineResultWithStdinFD(NSString* launchPath, NSArray* arguments, int stdinFD) {
     if ([launchPath isEqualToString:kV2RayXHelper]) {
         arguments = helperArgumentsWithOptionalDebug(arguments);
     }
-    [task setLaunchPath:launchPath];
-    [task setArguments:arguments];
-    NSPipe *stdoutpipe = [NSPipe pipe];
-    [task setStandardOutput:stdoutpipe];
-    NSPipe *stderrpipe = [NSPipe pipe];
-    [task setStandardError:stderrpipe];
-    [task setStandardInput:nullInputHandle()];
-    if (setupTask != nil) {
-        setupTask(task);
-    }
-    [task launch];
-    NSData *stdoutData = [[stdoutpipe fileHandleForReading] readDataToEndOfFile];
-    NSData *stderrData = [[stderrpipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-    NSString *stdoutString = [[NSString alloc] initWithData:stdoutData encoding:NSUTF8StringEncoding] ?: @"";
-    NSString *stderrString = [[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] ?: @"";
+    NSDictionary* result = spawnSyncProcess(launchPath, arguments, stdinFD, nil);
     return @{
-        @"exitCode": @(task.terminationStatus),
-        @"stdout": stdoutString,
-        @"stderr": stderrString,
+        @"exitCode": result[@"exitCode"] ?: @(-1),
+        @"stdout": result[@"stdout"] ?: @"",
+        @"stderr": result[@"stderr"] ?: @"",
     };
 }
 

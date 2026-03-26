@@ -24,8 +24,9 @@ typedef enum ProxyMode : NSInteger{
 
 
 NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments);
-NSDictionary* runCommandLineResultWithSetup(NSString* launchPath, NSArray* arguments, void (^setupTask)(NSTask* task));
+NSDictionary* runCommandLineResultWithStdinFD(NSString* launchPath, NSArray* arguments, int stdinFD);
 int runCommandLine(NSString* launchPath, NSArray* arguments);
+pid_t spawnDetachedProcess(NSString* launchPath, NSArray<NSString*>* arguments);
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSUserNotificationCenterDelegate> {
     BOOL proxyState;

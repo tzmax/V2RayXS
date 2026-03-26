@@ -5,7 +5,8 @@
 #import <unistd.h>
 
 NSDictionary* runCommandLineResult(NSString* launchPath, NSArray* arguments);
-NSDictionary* runCommandLineResultWithSetup(NSString* launchPath, NSArray* arguments, void (^setupTask)(NSTask* task));
+NSDictionary* runCommandLineResultWithStdinFD(NSString* launchPath, NSArray* arguments, int stdinFD);
+pid_t spawnDetachedProcess(NSString* launchPath, NSArray<NSString*>* arguments);
 
 static BOOL helperClientDebugEnabled(void) {
     return [[[NSProcessInfo processInfo] arguments] containsObject:@"--debug"];
@@ -152,22 +153,14 @@ static NSDictionary* helperClientReceiveFileDescriptorAndPayload(int socketFD) {
 }
 
 - (BOOL)launchDetachedCommandWithArguments:(NSArray<NSString*>*)arguments error:(NSString**)errorMessage {
-    NSTask* task = [[NSTask alloc] init];
-    [task setLaunchPath:self.helperPath];
-    [task setArguments:helperClientArgumentsWithOptionalDebug(arguments)];
-    NSFileHandle* nullHandle = [NSFileHandle fileHandleWithNullDevice];
-    [task setStandardInput:nullHandle];
-    [task setStandardOutput:nullHandle];
-    [task setStandardError:nullHandle];
-    @try {
-        [task launch];
-        return YES;
-    } @catch (NSException* exception) {
+    pid_t pid = spawnDetachedProcess(self.helperPath, helperClientArgumentsWithOptionalDebug(arguments));
+    if (pid == 0) {
         if (errorMessage != NULL) {
-            *errorMessage = exception.reason ?: @"Failed to launch detached helper command.";
+            *errorMessage = @"Failed to launch detached helper command.";
         }
         return NO;
     }
+    return YES;
 }
 
 - (BOOL)runCommandWithArguments:(NSArray<NSString*>*)arguments action:(NSString*)action {
@@ -258,10 +251,7 @@ static NSDictionary* helperClientReceiveFileDescriptorAndPayload(int socketFD) {
     NSArray<NSString*>* arguments = preferredName.length > 0 ? @[@"tun", @"allocate", preferredName, socketFDString] : @[@"tun", @"allocate", socketFDString];
     arguments = helperClientArgumentsWithOptionalDebug(arguments);
     int helperSocketFD = sockets[1];
-    NSDictionary* helperResult = runCommandLineResultWithSetup(self.helperPath, arguments, ^(NSTask* task) {
-        NSFileHandle* socketHandle = [[NSFileHandle alloc] initWithFileDescriptor:helperSocketFD closeOnDealloc:NO];
-        [task setStandardInput:socketHandle];
-    });
+    NSDictionary* helperResult = runCommandLineResultWithStdinFD(self.helperPath, arguments, helperSocketFD);
     close(sockets[1]);
     if ([helperResult[@"exitCode"] intValue] != 0) {
         close(sockets[0]);
