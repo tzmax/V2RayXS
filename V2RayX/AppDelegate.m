@@ -1573,7 +1573,24 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 - (NSData*) pacData {
-    return [NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/pac/%@",NSHomeDirectory(), selectedPacFileName]];
+    NSString *pacPath = [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/pac/%@",NSHomeDirectory(), selectedPacFileName];
+    NSData *rawPacData = [NSData dataWithContentsOfFile:pacPath];
+    if (rawPacData == nil) {
+        return nil;
+    }
+
+    // PAC files are stored as templates on disk. Replace runtime port placeholders
+    // only when the built-in HTTP server serves /proxy.pac so users can keep editing
+    // a stable template instead of chasing local port changes manually.
+    NSString *pacTemplate = [[NSString alloc] initWithData:rawPacData encoding:NSUTF8StringEncoding];
+    if (pacTemplate == nil) {
+        return rawPacData;
+    }
+
+    NSString *renderedPac = [pacTemplate stringByReplacingOccurrencesOfString:@"${V2RAYXS_SOCKS}" withString:[@(localPort) stringValue]];
+    renderedPac = [renderedPac stringByReplacingOccurrencesOfString:@"${V2RAYXS_HTTP}" withString:[@(httpPort) stringValue]];
+    NSData *renderedPacData = [renderedPac dataUsingEncoding:NSUTF8StringEncoding];
+    return renderedPacData ?: rawPacData;
 }
 
 - (void)saveAppStatus {
@@ -2123,6 +2140,8 @@ static int normalizedExitCodeFromWaitStatus(int status) {
         NSString* simplePac = [[NSBundle mainBundle] pathForResource:@"simple" ofType:@"pac"];
         NSString* pacPath = [NSString stringWithFormat:@"%@/Library/Application Support/V2RayXS/pac/%@",NSHomeDirectory(), selectedPacFileName];
         if ([[NSFileManager defaultManager] isWritableFileAtPath:pacPath]) {
+            // Reset restores the bundled PAC template. Runtime placeholders are still
+            // rendered only when /proxy.pac is served by the local HTTP server.
             [[NSData dataWithContentsOfFile:simplePac] writeToFile:pacPath atomically:YES];
         } else {
             NSAlert* writePacAlert = [[NSAlert alloc] init];

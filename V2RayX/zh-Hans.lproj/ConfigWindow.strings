@@ -129,7 +129,7 @@
 "mkg-dU-bRq.title" = "取消";
 
 /* Class = "NSTextFieldCell"; title = "If the local port is changed, the pac file also needs manual modification."; ObjectID = "nRL-kf-uam"; */
-"nRL-kf-uam.title" = "如果更改了默认的代理端口，PAC文件中的端口仍需手动编辑才可生效";
+"nRL-kf-uam.title" = "PAC templates can use ${V2RAYXS_SOCKS} and ${V2RAYXS_HTTP}, which are replaced automatically when the PAC file is served.";
 
 /* Class = "NSButtonCell"; title = "Support UDP"; ObjectID = "pEW-Gw-3ph"; */
 "pEW-Gw-3ph.title" = "开启UDP支持";

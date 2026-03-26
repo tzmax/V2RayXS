@@ -1,4 +1,7 @@
-var V2Ray = "SOCKS5 127.0.0.1:1081; SOCKS 127.0.0.1:1081; DIRECT;";
+// V2RayXS replaces the placeholders below when serving /proxy.pac.
+// ${V2RAYXS_SOCKS} is replaced with the current local SOCKS proxy port.
+// ${V2RAYXS_HTTP} is replaced with the current local HTTP proxy port.
+var V2Ray = "SOCKS5 127.0.0.1:${V2RAYXS_SOCKS}; SOCKS 127.0.0.1:${V2RAYXS_SOCKS}; DIRECT;";
 
 var domains = [
     'chrome-devtools-frontend.appspot.com',
