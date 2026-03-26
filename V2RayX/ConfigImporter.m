@@ -305,7 +305,7 @@
     if (!urlError) {
         NSString *decodedDataStr = [ConfigImporter decodeBase64String:urlStr];
         if ([decodedDataStr length] == 0) {
-            return nil;
+            decodedDataStr = urlStr;
         }
         decodedDataStr = [decodedDataStr stringByReplacingOccurrencesOfString:@"\r" withString:@""];
         NSArray *decodedDataArray = [decodedDataStr componentsSeparatedByString:@"\n"];
