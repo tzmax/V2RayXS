@@ -237,7 +237,12 @@ static int spawnProcess(NSString* launchPath, NSArray<NSString*>* arguments, NSD
         }
     }
 
-    int spawnError = posix_spawn(pidOut, [launchPath fileSystemRepresentation], &actions, NULL, argv, envp);
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+
+    int spawnError = posix_spawn(pidOut, [launchPath fileSystemRepresentation], &actions, &attr, argv, envp);
+    posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
     freeSpawnCStringArray(argv);
     freeSpawnCStringArray(envp);
@@ -417,7 +422,10 @@ static int normalizedExitCodeFromWaitStatus(int status) {
             NSMutableDictionary* environmentOverrides = [[NSMutableDictionary alloc] init];
             if (xrayTunFDContext != nil) {
                 int tunFD = [xrayTunFDContext[@"fd"] intValue];
-                fcntl(tunFD, F_SETFD, 0);
+                int fdFlags = fcntl(tunFD, F_GETFD);
+                if (fdFlags >= 0) {
+                    fcntl(tunFD, F_SETFD, fdFlags & ~FD_CLOEXEC);
+                }
                 self->coreTunFD = tunFD;
                 environmentOverrides[@"xray.tun.fd"] = [NSString stringWithFormat:@"%d", kXrayTunFDTarget];
                 environmentOverrides[@"XRAY_TUN_FD"] = [NSString stringWithFormat:@"%d", kXrayTunFDTarget];
