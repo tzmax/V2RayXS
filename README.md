@@ -1,7 +1,7 @@
 # V2RayXS: A simple GUI for Xray on macOS
 
 [![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/tzmax/V2RayXS)](https://github.com/tzmax/V2RayXS/releases)
-![GitHub release (latest by date)](https://img.shields.io/github/downloads/tzmax/V2RayXS/latest/total)
+![GitHub release](https://img.shields.io/github/downloads/tzmax/V2RayXS/total)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/tzmax/V2RayXS/build-actions.yml)](https://github.com/tzmax/V2RayXS/actions/workflows/build-actions.yml)
 
 **Attention**: If you want to use v2ray-core version please install the original project. <https://github.com/Cenmrev/V2RayX>
@@ -34,8 +34,8 @@ Q: After using tun mode, the device is disconnected from the network?
 
 A: It may be that the route of the default gateway is broken. You can check your routing table by executing the `netstat -r` command through the device terminal. Normally, there will be a `default` route, as follows
 
-```
-tzmaxdeMacBookPro: tzmax$ netstat -r
+```shell
+$ netstat -r
 Routing tables
 
 Internet:
@@ -89,6 +89,23 @@ V2RayXS provide three modes:
 -   Manual Mode: V2RayXS will not modify any macOS network settings, but only start or stop xray core.
 -   Tun Mode (**Experimental**): V2RayXS will create a virtual network card, and then try to set the default gateway to take over and proxy the full traffic of the device.
 
+### PAC placeholders
+
+V2RayXS supports placeholder replacement when serving `http://127.0.0.1:8070/proxy.pac`.
+
+Supported placeholders:
+
+- `${V2RAYXS_SOCKS}`: replaced with the current local SOCKS proxy port.
+- `${V2RAYXS_HTTP}`: replaced with the current local HTTP proxy port.
+
+The PAC file stored on disk remains a template. Placeholder replacement happens only when the PAC content is served by the built-in HTTP server, so changing local ports does not require manual PAC edits.
+
+Example:
+
+```javascript
+var V2Ray = "SOCKS5 127.0.0.1:${V2RAYXS_SOCKS}; SOCKS 127.0.0.1:${V2RAYXS_SOCKS}; DIRECT;";
+```
+
 
 Options in menu list `Routing Rule` determine how xray core deals with incoming traffic. Core routing rules apply to all three modes above.
 
@@ -119,6 +136,9 @@ So, to totally uninstall V2RayXS, just delete V2RayXS.app and the files above. :
 
 Thanks to the excellent implementation of [Xray core](https://github.com/XTLS/Xray-core), the client supports multiple protocols such as Shadowsocks, Socks, Trojan, Wireguard as outbounds protocols.
 
+<details>
+<summary>How to configure Advanced / Outbounds? (click me for details)</summary>
+
 First of all, I would like to explain here why the current GUI configuration only supports `VMess` and `VLESS` configuration for the time being, because the workload of adapting all outbounds is not small, and each protocol is constantly updated. Due to the current layout of hard-coding implementation, the GUI configuration page requires the cost of updating and maintaining the software for each protocol update is very high (if anyone is willing to adapt, I am willing to review it). The benefits of this is not as good as having a setting function that can directly configure the json configuration of outbounds, so I think that's what [@Cenmrev](https://github.com/Cenmrev) thought when he designed the `Advanced / Outbounds` function.
 
 Because more people have asked before issues [#18](https://github.com/tzmax/V2RayXS/issues/18) [#34](https://github.com/tzmax/V2RayXS/issues/34) [#52](https://github.com/tzmax/V2RayXS/issues/52) (including recent friends also asking how to use `Trojan` with V2RayXS?), so I took time to write this explanation.
@@ -129,7 +149,7 @@ Next, I will try to introduce how to import `Trojan` outbounds in V2RayXS and ma
 
 2. After obtaining the complete JSON configuration file, the general configuration file content is as follows (the following configuration example comes from [Xray-examples/Trojan-TCP-XTLS](https://github.com/XTLS/Xray-examples/blob/main/Trojan-TCP-XTLS/config_client.json), and the content of the configuration files of different protocols may vary greatly)
 
-```json
+```jsonc
 {
     "log": {
         "loglevel": "debug"
@@ -245,11 +265,21 @@ Of course, you can also use it to control your `VMess` and `VLESS` configuration
 - [Wireguard](https://xtls.github.io/en/config/outbounds/wireguard.html)
 - And others that are supported by `Xray core`
 
+</details>
+
 ## Acknowledge
 
 This repo is based on the [Cenmrev/V2RayX](https://github.com/Cenmrev/V2RayX) project for maintenance and update.
 
-V2RayXS uses [GCDWebServer](https://github.com/swisspol/GCDWebServer) to provide a local pac server. V2RayXS also uses many ideas and codes from [ShadowsocksX](https://github.com/shadowsocks/shadowsocks-iOS/tree/master), especially, the codes of [v2rays_sysconfig](https://github.com/tzmax/V2RayXS/blob/master/v2rayx_sysconf/main.m) are simply copied from [shadowsocks_sysconf](https://github.com/shadowsocks/shadowsocks-iOS/blob/master/shadowsocks_sysconf/main.m) with some modifications.
+V2RayXS uses [GCDWebServer](https://github.com/swisspol/GCDWebServer) to provide a local pac server. [v2rays_sysconfig](https://github.com/tzmax/V2RayXS/blob/master/v2rayx_sysconf/main.m) has now been completely rewritten. This refactoring enables it to support Tun mode and improves compatibility with modern macOS systems.
+
+> V2RayXS also uses many ideas and codes from [ShadowsocksX](https://github.com/shadowsocks/shadowsocks-iOS/tree/master), especially, ~~the codes of [v2rays_sysconfig](https://github.com/tzmax/V2RayXS/blob/master/v2rayx_sysconf/main.m) are simply copied from [shadowsocks_sysconf](https://github.com/shadowsocks/shadowsocks-iOS/blob/master/shadowsocks_sysconf/main.m) with some modifications.~~
+
+## Contributors
+
+We welcome all forms of sharing and appreciate the contributions of everyone involved.
+
+[![Contributors](https://contrib.rocks/image?repo=tzmax/V2RayXS)](https://github.com/tzmax/V2RayXS/graphs/contributors)
 
 ## Donation
 
@@ -264,3 +294,13 @@ To donate to Project Xray, you may refer to [this page](https://xtls.github.io/#
 V2rayXS will not be updated frequently. Users can replace V2RayXS.app/Contents/Resources/xray with the newest Xray-core downloaded from <https://github.com/XTLS/Xray-core/releases>.
 
 The developer currently does not have enough time to add more features to V2RayXS. However, welcome to the contribution at any time, and the fork and your own version.
+
+This repository is available under the [GPL-3.0 License](https://opensource.org/license/GPL-3.0), and distributed “as-is” without any warranty of any kind. The authors and contributors are not responsible for any damages or losses resulting from the use or inability to use this software, including but not limited to data loss, business interruption, or any other potential harm.
+
+**No Warranties**: This software comes without any express or implied warranties, including but not limited to implied warranties of merchantability, fitness for a particular purpose, and non-infringement.
+
+**User Responsibilities**: By using this software, you agree to take full responsibility for any outcomes resulting from its use.
+
+## Stargazers over time
+
+[![Stargazers over time](https://starchart.cc/tzmax/V2RayXS.svg?variant=light)](https://starchart.cc/tzmax/V2RayXS)
