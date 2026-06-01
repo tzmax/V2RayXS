@@ -492,7 +492,7 @@
         if (returnCode != 0) {
             [_checkLabel setHidden:YES];
             NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:[NSString stringWithFormat:@"%@ is not a valid v2ray config file", filePath]];
+            [alert setMessageText:[NSString stringWithFormat:@"%@ is not a valid xray config file", filePath]];
             [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
                 return;
             }];

@@ -2908,8 +2908,9 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     if (!useCusProfile) {
         [[NSWorkspace sharedWorkspace] openFile:logDirPath];
     } else {
+        NSString* customConfigPath = selectedCusServerIndex >= 0 && selectedCusServerIndex < cusProfiles.count ? cusProfiles[selectedCusServerIndex] : @"Unknown custom config path";
         NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:[NSString stringWithFormat:@"Check %@.", cusProfiles[selectedCusServerIndex]]];
+        [alert setMessageText:[NSString stringWithFormat:@"Custom config is in use. Check the log path defined in:\n%@", customConfigPath]];
         [alert runModal];
     }
 }
@@ -2920,8 +2921,9 @@ static int normalizedExitCodeFromWaitStatus(int status) {
         NSString* command = [NSString stringWithFormat:@"export http_proxy=\"http://127.0.0.1:%ld\"; export HTTP_PROXY=\"http://127.0.0.1:%ld\"; export https_proxy=\"http://127.0.0.1:%ld\"; export HTTPS_PROXY=\"http://127.0.0.1:%ld\"", httpPort, httpPort, httpPort, httpPort];
         [[NSPasteboard generalPasteboard] setString:command forType:NSStringPboardType];
     } else {
+        NSString* customConfigPath = selectedCusServerIndex >= 0 && selectedCusServerIndex < cusProfiles.count ? cusProfiles[selectedCusServerIndex] : @"Unknown custom config path";
         NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:[NSString stringWithFormat:@"Check %@.", cusProfiles[selectedCusServerIndex]]];
+        [alert setMessageText:[NSString stringWithFormat:@"Export command is unavailable for custom configs. Custom configs define their own inbound ports:\n%@", customConfigPath]];
         [alert runModal];
     }
 }
