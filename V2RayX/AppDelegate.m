@@ -64,6 +64,7 @@ typedef struct {
     int coreProcessStatus;
     int coreTunFD;
     NSString* coreConfigPath;
+    BOOL coreStopRequested;
     dispatch_source_t dispatchPacSource;
     dispatch_source_t terminationSignalSource;
     dispatch_source_t interruptSignalSource;
@@ -99,6 +100,8 @@ typedef struct {
 - (void)applyAutomationTargetIfNeeded;
 - (NSMenuItem*)menuItemForAutomationMode:(NSString*)modeName;
 - (void)ensureCoreLogDirectoryExists;
+- (NSString*)coreLogPathForCurrentLogLevel;
+- (void)appendCoreLogLine:(NSString*)line;
 - (NSString*)currentTunSessionState;
 - (NSString*)currentTunInterfaceName;
 - (BOOL)shouldTreatTunSessionAsActive;
@@ -206,7 +209,7 @@ static NSArray<NSString*>* buildSpawnEnvironmentComponents(NSDictionary<NSString
     return components;
 }
 
-static int spawnProcess(NSString* launchPath, NSArray<NSString*>* arguments, NSDictionary<NSString*, NSString*>* environmentOverrides, int mappedFDSource, int mappedFDTarget, pid_t* pidOut) {
+static int spawnProcess(NSString* launchPath, NSArray<NSString*>* arguments, NSDictionary<NSString*, NSString*>* environmentOverrides, int mappedFDSource, int mappedFDTarget, NSString* outputLogPath, pid_t* pidOut) {
     if (launchPath.length == 0 || pidOut == NULL) {
         return EINVAL;
     }
@@ -234,12 +237,14 @@ static int spawnProcess(NSString* launchPath, NSArray<NSString*>* arguments, NSD
         }
     }
 
-    // Give the child clean fd 0/1/2 pointing to /dev/null.
+    // Give the child clean fd 0/1/2. stdout/stderr may point to core.log.
     // Must come AFTER tun fd mapping: tun maps to fd 3 (kXrayTunFDTarget),
     // so addopen on fd 0/1/2 cannot conflict with the tun fd at fd 3.
     posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    const char* outputPath = outputLogPath.length > 0 ? [outputLogPath fileSystemRepresentation] : "/dev/null";
+    int outputFlags = outputLogPath.length > 0 ? (O_WRONLY | O_CREAT | O_APPEND) : O_WRONLY;
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, outputPath, outputFlags, 0644);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, outputPath, outputFlags, 0644);
 
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
@@ -494,6 +499,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     [fileManager createDirectoryAtPath:logDirPath withIntermediateDirectories:YES attributes:nil error:nil];
     [fileManager createFileAtPath:[NSString stringWithFormat:@"%@/access.log", logDirPath] contents:nil attributes:nil];
     [fileManager createFileAtPath:[NSString stringWithFormat:@"%@/error.log", logDirPath] contents:nil attributes:nil];
+    [fileManager createFileAtPath:[NSString stringWithFormat:@"%@/core.log", logDirPath] contents:nil attributes:nil];
     
     // initialize variables
     NSNumber* setingVersion = [[NSUserDefaults standardUserDefaults] objectForKey:@"setingVersion"];
@@ -545,6 +551,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
             self->coreProcessStatus = 0;
             self->coreTunFD = -1;
             self->coreConfigPath = nil;
+            self->coreStopRequested = NO;
             NSDictionary* xrayTunFDContext = nil;
             if (self->proxyState && self->proxyMode == tunMode && self.useXrayTun && [self currentCoreSupportsXrayTun]) {
                 NSString* preferredTunName = [[NSUserDefaults standardUserDefaults] objectForKey:@"xrayTunInterfaceName"];
@@ -584,7 +591,8 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                 environmentOverrides[@"xray.tun.fd"] = [NSString stringWithFormat:@"%d", kXrayTunFDTarget];
                 environmentOverrides[@"XRAY_TUN_FD"] = [NSString stringWithFormat:@"%d", kXrayTunFDTarget];
             }
-            int spawnError = spawnProcess([self getV2rayPath], coreArguments, environmentOverrides, self->coreTunFD, xrayTunFDContext != nil ? kXrayTunFDTarget : -1, &self->coreProcessPID);
+            NSString* coreOutputLogPath = [self coreLogPathForCurrentLogLevel];
+            int spawnError = spawnProcess([self getV2rayPath], coreArguments, environmentOverrides, self->coreTunFD, xrayTunFDContext != nil ? kXrayTunFDTarget : -1, coreOutputLogPath, &self->coreProcessPID);
             if (spawnError != 0) {
                 if (self->coreTunFD >= 0) {
                     close(self->coreTunFD);
@@ -596,6 +604,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                 }
                 NSString* message = [NSString stringWithFormat:@"Failed to start Xray (spawn error %d).", spawnError];
                 NSLog(@"%@", message);
+                [self appendCoreLogLine:message];
                 [self reportHelperFailureMessage:message];
                 continue;
             }
@@ -604,6 +613,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                 [self activateXrayTunLeaseAfterCoreSpawn:xrayTunFDContext];
             }
             waitForSpawnedProcess(self->coreProcessPID, &self->coreProcessStatus);
+            int exitCode = normalizedExitCodeFromWaitStatus(self->coreProcessStatus);
             if (self->coreTunFD >= 0) {
                 close(self->coreTunFD);
                 self->coreTunFD = -1;
@@ -612,7 +622,16 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                 [[NSFileManager defaultManager] removeItemAtPath:self->coreConfigPath error:nil];
                 self->coreConfigPath = nil;
             }
-            NSLog(@"core exit with code %d", normalizedExitCodeFromWaitStatus(self->coreProcessStatus));
+            BOOL stoppedByRequest = self->coreStopRequested;
+            self->coreStopRequested = NO;
+            if (!stoppedByRequest && exitCode != 0) {
+                if (WIFSIGNALED(self->coreProcessStatus)) {
+                    [self appendCoreLogLine:[NSString stringWithFormat:@"core terminated unexpectedly by signal %d", WTERMSIG(self->coreProcessStatus)]];
+                } else {
+                    [self appendCoreLogLine:[NSString stringWithFormat:@"core exited unexpectedly with code %d", exitCode]];
+                }
+            }
+            NSLog(@"core exit with code %d", exitCode);
             self->coreProcessPID = 0;
         }
     });
@@ -752,6 +771,35 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     [fileManager createDirectoryAtPath:logDirPath withIntermediateDirectories:YES attributes:nil error:nil];
     [fileManager createFileAtPath:[NSString stringWithFormat:@"%@/access.log", logDirPath] contents:nil attributes:nil];
     [fileManager createFileAtPath:[NSString stringWithFormat:@"%@/error.log", logDirPath] contents:nil attributes:nil];
+    [fileManager createFileAtPath:[NSString stringWithFormat:@"%@/core.log", logDirPath] contents:nil attributes:nil];
+}
+
+- (NSString*)coreLogPathForCurrentLogLevel {
+    if (logLevel.length == 0 || [logLevel isEqualToString:@"none"]) {
+        return nil;
+    }
+    [self ensureCoreLogDirectoryExists];
+    return [logDirPath stringByAppendingPathComponent:@"core.log"];
+}
+
+- (void)appendCoreLogLine:(NSString*)line {
+    NSString* coreLogPath = [self coreLogPathForCurrentLogLevel];
+    if (coreLogPath.length == 0 || line.length == 0) {
+        return;
+    }
+
+    NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+    NSString* logLine = [NSString stringWithFormat:@"%@ %@\n", [formatter stringFromDate:[NSDate date]], line];
+    NSData* data = [logLine dataUsingEncoding:NSUTF8StringEncoding];
+    NSFileHandle* fileHandle = [NSFileHandle fileHandleForWritingAtPath:coreLogPath];
+    if (fileHandle == nil) {
+        [data writeToFile:coreLogPath atomically:YES];
+        return;
+    }
+    [fileHandle seekToEndOfFile];
+    [fileHandle writeData:data];
+    [fileHandle closeFile];
 }
 
 - (BOOL)installHelper:(BOOL)force {
@@ -1683,6 +1731,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
     // Now wait for xray (it has been dying since the SIGTERM above).
     if (coreProcessPID > 0) {
+        coreStopRequested = YES;
         terminateSpawnedProcess(coreProcessPID, 2.0, &coreProcessStatus);
         coreProcessPID = 0;
     }
@@ -2383,6 +2432,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
 -(void)unloadV2ray {
     if (coreProcessPID > 0) {
+        coreStopRequested = YES;
         terminateSpawnedProcess(coreProcessPID, 2.0, &coreProcessStatus);
         coreProcessPID = 0;
     }
