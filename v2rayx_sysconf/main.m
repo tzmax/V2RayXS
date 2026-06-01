@@ -36,7 +36,33 @@
 #import "tun_device.h"
 #import <stdarg.h>
 
-#define INFO "v2rayx_sysconf\nusage:\n  v2rayx_sysconf -v\n  v2rayx_sysconf off [--debug]\n  v2rayx_sysconf auto [--debug]\n  v2rayx_sysconf global <socksPort> <httpPort> [--debug]\n  v2rayx_sysconf save [--debug]\n  v2rayx_sysconf restore [--debug]\n  v2rayx_sysconf daemon run [--debug]\n  v2rayx_sysconf daemon status [--json] [--debug]\n  v2rayx_sysconf daemon stop [--json] [--debug]\n  v2rayx_sysconf tun start <socksPort> [--json] [--debug]\n  v2rayx_sysconf tun allocate [<utunName>] [--json] [--debug]\n  v2rayx_sysconf tun activate [<leaseId>] [--json] [--debug]\n  v2rayx_sysconf tun deactivate [--json] [--debug]\n  v2rayx_sysconf tun stop [--json] [--debug]\n  v2rayx_sysconf tun status [--json] [--debug]\n  v2rayx_sysconf tun cleanup [--json] [--debug]\n  v2rayx_sysconf route add <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route del <ip...> [--json] [--require-active] [--debug]\n  v2rayx_sysconf route list [--json] [--debug]\n  v2rayx_sysconf route clear [--json] [--require-active] [--debug]\n  v2rayx_sysconf route apply [--json] [--debug]\n  v2rayx_sysconf route sync-file <path> [--json] [--require-active] [--debug]\n"
+static NSString* const UsageLines[] = {
+    @"v2rayx_sysconf",
+    @"usage:",
+    @"  v2rayx_sysconf -v",
+    @"  v2rayx_sysconf off [--debug]",
+    @"  v2rayx_sysconf auto [--debug]",
+    @"  v2rayx_sysconf global <socksPort> <httpPort> [--debug]",
+    @"  v2rayx_sysconf save [--debug]",
+    @"  v2rayx_sysconf restore [--debug]",
+    @"  v2rayx_sysconf daemon run [--debug]",
+    @"  v2rayx_sysconf daemon status [--json] [--debug]",
+    @"  v2rayx_sysconf daemon stop [--json] [--debug]",
+    @"  v2rayx_sysconf tun start <socksPort> [--json] [--debug]",
+    @"  v2rayx_sysconf tun allocate [<utunName>] [--json] [--debug]",
+    @"  v2rayx_sysconf tun activate [<leaseId>] [--json] [--debug]",
+    @"  v2rayx_sysconf tun deactivate [--json] [--debug]",
+    @"  v2rayx_sysconf tun stop [--json] [--debug]",
+    @"  v2rayx_sysconf tun status [--json] [--debug]",
+    @"  v2rayx_sysconf tun diagnose [--json] [--debug]",
+    @"  v2rayx_sysconf tun cleanup [--json] [--debug]",
+    @"  v2rayx_sysconf route add <ip...> [--json] [--require-active] [--debug]",
+    @"  v2rayx_sysconf route del <ip...> [--json] [--require-active] [--debug]",
+    @"  v2rayx_sysconf route list [--json] [--debug]",
+    @"  v2rayx_sysconf route clear [--json] [--require-active] [--debug]",
+    @"  v2rayx_sysconf route apply [--json] [--debug]",
+    @"  v2rayx_sysconf route sync-file <path> [--json] [--require-active] [--debug]",
+};
 
 static NSArray<NSString*>* const IPv4TakeoverCIDRs = @[@"0.0.0.0/1", @"128.0.0.0/1"];
 
@@ -72,13 +98,16 @@ static NSDictionary* makeResponse(BOOL ok, NSString* message, NSDictionary* payl
 static void printResponse(NSDictionary* response, BOOL asJSON);
 static BOOL shouldOutputJSON(NSArray<NSString*>* arguments);
 static BOOL shouldEnableDebugLogging(NSArray<NSString*>* arguments);
+static NSString* usageText(void);
 static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments);
 static NSDictionary* runtimeSessionStatusPayload(void);
 static NSDictionary* routeListPayload(void);
+static NSDictionary* tunDiagnosePayload(NSDictionary* statusPayload);
 static NSDictionary* requestActiveSession(NSDictionary* request);
 static NSDictionary* stopTunSession(void);
 static BOOL setupTunSession(int localProxyPort, NSString** errorMessage);
-static BOOL activateAllocatedTunLease(NSString* tunName, NSString** errorMessage);
+static BOOL activateAllocatedTunLease(NSString* tunName, NSString** errorMessage, NSDictionary** diagnosticsOut);
+static NSDictionary* errorPayload(NSString* code, NSString* stage, NSDictionary* diagnostics);
 static NSDictionary* processServerRequest(NSDictionary* request, int* responseFDOut);
 static void updateRouteBackupState(NSMutableDictionary* backup, NSString* state, NSString* lastError);
 static void updateRouteBackupRoutes(NSMutableDictionary* backup);
@@ -147,6 +176,28 @@ static NSDictionary* makeResponse(BOOL ok, NSString* message, NSDictionary* payl
     return response;
 }
 
+static NSDictionary* errorPayload(NSString* code, NSString* stage, NSDictionary* diagnostics) {
+    NSMutableDictionary* payload = [[NSMutableDictionary alloc] init];
+    if (code.length > 0) {
+        payload[@"code"] = code;
+    }
+    if (stage.length > 0) {
+        payload[@"stage"] = stage;
+    }
+    if ([diagnostics isKindOfClass:[NSDictionary class]]) {
+        payload[@"diagnostics"] = diagnostics;
+    }
+    return payload;
+}
+
+static BOOL proxyDiagnosticsIndicatesProxyFailure(NSDictionary* diagnostics) {
+    if (![diagnostics isKindOfClass:[NSDictionary class]]) {
+        return NO;
+    }
+    NSString* failure = [diagnostics[@"failure"] isKindOfClass:[NSString class]] ? diagnostics[@"failure"] : @"";
+    return [failure isEqualToString:@"dynamic_networksetup_failed"] || [failure hasPrefix:@"dynamic_"] || [failure containsString:@"preferences"] || [failure containsString:@"proxy"];
+}
+
 static void printResponse(NSDictionary* response, BOOL asJSON) {
     if (asJSON) {
         NSData* data = [NSJSONSerialization dataWithJSONObject:response options:NSJSONWritingPrettyPrinted error:nil];
@@ -166,6 +217,15 @@ static BOOL shouldOutputJSON(NSArray<NSString*>* arguments) {
 
 static BOOL shouldEnableDebugLogging(NSArray<NSString*>* arguments) {
     return [arguments containsObject:@"--debug"];
+}
+
+static NSString* usageText(void) {
+    NSUInteger count = sizeof(UsageLines) / sizeof(UsageLines[0]);
+    NSMutableArray<NSString*>* lines = [[NSMutableArray alloc] initWithCapacity:count];
+    for (NSUInteger index = 0; index < count; index += 1) {
+        [lines addObject:UsageLines[index]];
+    }
+    return [[lines componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"];
 }
 
 static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments) {
@@ -277,6 +337,8 @@ static NSDictionary* runtimeSessionStatusPayload(void) {
         @"whitelistPersistedCount": @([persistedEntries count]),
         @"whitelistAppliedCount": @([activeWhitelistRoutes count]),
         @"lastError": backup[ROUTE_BACKUP_LAST_ERROR_KEY] ?: @"",
+        @"lastErrorDetail": daemonStateLastErrorPayload(),
+        @"pendingLease": daemonStatePendingLeasePayload(),
         @"leaseId": daemonStateLeaseIdentifier(),
     };
 }
@@ -309,6 +371,88 @@ static NSDictionary* cliDiagnosticStatusPayload(void) {
             @"lastTunName": backup[ROUTE_BACKUP_TUN_NAME_KEY] ?: @"",
             @"lastSessionType": backup[ROUTE_BACKUP_SESSION_TYPE_KEY] ?: SESSION_TYPE_NONE,
         },
+    };
+}
+
+static NSArray<NSString*>* existingUtunInterfacesForDiagnostics(void) {
+    NSDictionary* taskResult = runTool(@"/sbin/ifconfig", @[]);
+    NSString* output = taskResult[@"stdout"] ?: @"";
+    NSMutableArray<NSString*>* interfaces = [[NSMutableArray alloc] init];
+    [output enumerateLinesUsingBlock:^(NSString* line, BOOL* stop) {
+        (void)stop;
+        NSRange colonRange = [line rangeOfString:@":"];
+        if (colonRange.location == NSNotFound) {
+            return;
+        }
+        NSString* name = [line substringToIndex:colonRange.location];
+        if ([name hasPrefix:@"utun"]) {
+            [interfaces addObject:name];
+        }
+    }];
+    return interfaces;
+}
+
+static NSArray<NSString*>* enabledNetworkServiceNamesForDiagnostics(void) {
+    SCPreferencesRef prefRef = SCPreferencesCreate(NULL, CFSTR("V2RayXS"), NULL);
+    if (prefRef == NULL) {
+        return @[];
+    }
+    SCNetworkSetRef currentSet = SCNetworkSetCopyCurrent(prefRef);
+    if (currentSet == NULL) {
+        CFRelease(prefRef);
+        return @[];
+    }
+    NSArray* services = CFBridgingRelease(SCNetworkSetCopyServices(currentSet));
+    CFRelease(currentSet);
+    CFRelease(prefRef);
+    NSMutableArray<NSString*>* names = [[NSMutableArray alloc] init];
+    for (id serviceObject in services) {
+        SCNetworkServiceRef serviceRef = (__bridge SCNetworkServiceRef)serviceObject;
+        if (serviceRef == NULL || !SCNetworkServiceGetEnabled(serviceRef)) {
+            continue;
+        }
+        NSString* serviceName = (__bridge NSString*)SCNetworkServiceGetName(serviceRef);
+        if (serviceName.length > 0) {
+            [names addObject:serviceName];
+        }
+    }
+    return names;
+}
+
+static NSDictionary* lastErrorDetailFromStatusPayload(NSDictionary* statusPayload) {
+    if (![statusPayload isKindOfClass:[NSDictionary class]]) {
+        return @{};
+    }
+    NSDictionary* nestedStatus = [statusPayload[@"status"] isKindOfClass:[NSDictionary class]] ? statusPayload[@"status"] : statusPayload;
+    NSDictionary* detail = [nestedStatus[@"lastErrorDetail"] isKindOfClass:[NSDictionary class]] ? nestedStatus[@"lastErrorDetail"] : @{};
+    return detail;
+}
+
+static NSDictionary* tunDiagnosePayload(NSDictionary* statusPayload) {
+    NSOperatingSystemVersion version = [[NSProcessInfo processInfo] operatingSystemVersion];
+#if defined(__arm64__)
+    NSString* arch = @"arm64";
+#elif defined(__x86_64__)
+    NSString* arch = @"x86_64";
+#else
+    NSString* arch = @"unknown";
+#endif
+    return @{
+        @"status": statusPayload ?: @{},
+        @"environment": @{
+            @"helperVersion": VERSION,
+            @"arch": arch,
+            @"macOS": [NSString stringWithFormat:@"%ld.%ld.%ld", (long)version.majorVersion, (long)version.minorVersion, (long)version.patchVersion],
+            @"effectiveUid": @(geteuid()),
+        },
+        @"paths": @{
+            @"controlSocket": helperControlSocketPath() ?: @"",
+            @"tunLock": helperTunSessionLockPath() ?: @"",
+            @"routeBackup": [helperRouteBackupFileURL() path] ?: @"",
+        },
+        @"networkServices": enabledNetworkServiceNamesForDiagnostics(),
+        @"utunInterfaces": existingUtunInterfacesForDiagnostics(),
+        @"lastErrorDetail": lastErrorDetailFromStatusPayload(statusPayload),
     };
 }
 
@@ -435,14 +579,19 @@ static NSDictionary* processServerRequest(NSDictionary* request, int* responseFD
     }
     if ([command isEqualToString:@"session.activate"]) {
         NSString* errorMessage = nil;
+        NSDictionary* diagnostics = nil;
         NSString* activatedTunName = nil;
         NSString* leaseId = nil;
         if (!daemonStateResolvePendingLease(payload[@"leaseId"], &activatedTunName, &leaseId, &errorMessage)) {
-            return makeResponse(NO, errorMessage ?: @"Failed to activate pending tun lease.", nil);
+            daemonStateRecordLastError(@"tun.lease_missing", @"activate.resolve_pending_lease", errorMessage ?: @"Failed to activate pending tun lease.", nil);
+            return makeResponse(NO, errorMessage ?: @"Failed to activate pending tun lease.", errorPayload(@"tun.lease_missing", @"activate.resolve_pending_lease", nil));
         }
-        if (!activateAllocatedTunLease(activatedTunName, &errorMessage)) {
+        if (!activateAllocatedTunLease(activatedTunName, &errorMessage, &diagnostics)) {
             daemonStateClearLease();
-            return makeResponse(NO, errorMessage ?: @"Failed to activate tun lease.", nil);
+            NSString* code = proxyDiagnosticsIndicatesProxyFailure(diagnostics) ? @"proxy.disable_failed" : @"tun.activate_failed";
+            NSString* stage = [code isEqualToString:@"proxy.disable_failed"] ? @"activate.disable_system_proxy" : @"activate.commit";
+            daemonStateRecordLastError(code, stage, errorMessage ?: @"Failed to activate tun lease.", diagnostics);
+            return makeResponse(NO, errorMessage ?: @"Failed to activate tun lease.", errorPayload(code, stage, diagnostics));
         }
         daemonStateActivatePendingLease();
         return makeResponse(YES, @"Tun lease activated.", @{@"leaseId": leaseId ?: @"", @"tunName": activatedTunName ?: @"", @"status": runtimeSessionStatusPayload()});
@@ -585,6 +734,11 @@ static NSDictionary* handleTunCommand(NSArray<NSString*>* arguments) {
     if (arguments.count >= 2 && [arguments[1] isEqualToString:@"cleanup"]) {
         return handleTunCleanupCommand();
     }
+    if (arguments.count >= 2 && [arguments[1] isEqualToString:@"diagnose"]) {
+        NSDictionary* daemonResponse = requestDaemonSession(daemonRPCMakeRequest(@"session.status", @{}), NULL);
+        NSDictionary* status = [daemonResponse[@"ok"] boolValue] ? daemonResponse : cliDiagnosticStatusPayload();
+        return makeResponse(YES, @"Tun diagnostics.", tunDiagnosePayload(status));
+    }
     if (arguments.count >= 2 && [arguments[1] isEqualToString:@"status"]) {
         NSDictionary* daemonResponse = requestDaemonSession(daemonRPCMakeRequest(@"session.status", @{}), NULL);
         if ([daemonResponse[@"ok"] boolValue]) {
@@ -626,10 +780,17 @@ static BOOL setupTunSession(int localProxyPort, NSString** errorMessage) {
         releaseTunSessionLock();
         return NO;
     }
-    if (!applySystemProxyMode(@"off", nil, 0, 0)) {
-        if (errorMessage != NULL) {
-            *errorMessage = @"Failed to disable existing system proxy before enabling tun mode.";
+    NSString* proxyError = nil;
+    NSDictionary* proxyDiagnostics = nil;
+    if (!applySystemProxyModeWithDiagnostics(@"off", nil, 0, 0, &proxyError, &proxyDiagnostics)) {
+        NSString* message = @"Failed to disable existing system proxy before enabling tun mode.";
+        if (proxyError.length > 0) {
+            message = [message stringByAppendingFormat:@" %@", proxyError];
         }
+        if (errorMessage != NULL) {
+            *errorMessage = message;
+        }
+        daemonStateRecordLastError(@"proxy.disable_failed", @"embedded.disable_system_proxy", message, proxyDiagnostics);
         releaseTunSessionLock();
         return NO;
     }
@@ -670,7 +831,7 @@ static BOOL setupTunSession(int localProxyPort, NSString** errorMessage) {
     return YES;
 }
 
-static BOOL activateAllocatedTunLease(NSString* tunName, NSString** errorMessage) {
+static BOOL activateAllocatedTunLease(NSString* tunName, NSString** errorMessage, NSDictionary** diagnosticsOut) {
     if (!acquireTunSessionLock(errorMessage)) {
         return NO;
     }
@@ -688,9 +849,18 @@ static BOOL activateAllocatedTunLease(NSString* tunName, NSString** errorMessage
         releaseTunSessionLock();
         return NO;
     }
-    if (!applySystemProxyMode(@"off", nil, 0, 0)) {
+    NSString* proxyError = nil;
+    NSDictionary* proxyDiagnostics = nil;
+    if (!applySystemProxyModeWithDiagnostics(@"off", nil, 0, 0, &proxyError, &proxyDiagnostics)) {
+        NSString* message = @"Failed to disable existing system proxy before enabling tun mode.";
+        if (proxyError.length > 0) {
+            message = [message stringByAppendingFormat:@" %@", proxyError];
+        }
         if (errorMessage != NULL) {
-            *errorMessage = @"Failed to disable existing system proxy before enabling tun mode.";
+            *errorMessage = message;
+        }
+        if (diagnosticsOut != NULL) {
+            *diagnosticsOut = proxyDiagnostics;
         }
         releaseTunSessionLock();
         return NO;
@@ -785,7 +955,7 @@ int main(int argc, const char * argv[])
 
     @autoreleasepool {
         if (argc < 2) {
-            printf(INFO);
+            printf("%s", [usageText() UTF8String]);
             return EXIT_USAGE;
         }
         NSMutableArray<NSString*>* arguments = [[NSMutableArray alloc] init];

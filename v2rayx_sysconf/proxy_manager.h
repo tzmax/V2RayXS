@@ -7,5 +7,6 @@ BOOL parseProxyPorts(const char* socksArg, const char* httpArg, int* localPort, 
 NSDictionary* loadProxyBackup(void);
 BOOL runProxySaveMode(void);
 BOOL applySystemProxyMode(NSString* mode, NSDictionary* originalSets, int localPort, int httpPort);
+BOOL applySystemProxyModeWithDiagnostics(NSString* mode, NSDictionary* originalSets, int localPort, int httpPort, NSString** errorMessage, NSDictionary** diagnosticsOut);
 
 #endif /* proxy_manager_h */

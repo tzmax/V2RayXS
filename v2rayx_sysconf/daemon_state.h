@@ -17,9 +17,12 @@ NSString* daemonStateSocksPort(void);
 void daemonStateActivateEmbeddedSession(NSString* tunName, NSInteger socksPort);
 BOOL daemonStateStoreFDLease(NSString* leaseId, NSString* tunName, int tunFD, NSString** errorMessage);
 BOOL daemonStateHasPendingLease(void);
+NSDictionary* daemonStatePendingLeasePayload(void);
 BOOL daemonStateResolvePendingLease(NSString* requestedLeaseId, NSString** tunNameOut, NSString** leaseIdOut, NSString** errorMessage);
 void daemonStateActivatePendingLease(void);
 void daemonStateClearLease(void);
 BOOL daemonStateIsActive(void);
+void daemonStateRecordLastError(NSString* code, NSString* stage, NSString* message, NSDictionary* diagnostics);
+NSDictionary* daemonStateLastErrorPayload(void);
 
 #endif /* daemon_state_h */

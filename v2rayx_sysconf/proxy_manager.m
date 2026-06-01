@@ -6,7 +6,7 @@
 #import "proxy_manager.h"
 
 static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments);
-static BOOL runNetworksetup(NSArray<NSString*>* arguments);
+static NSDictionary* runNetworksetup(NSArray<NSString*>* arguments);
 static BOOL setProxyFlag(NSMutableDictionary* proxies, NSString* key, BOOL enabled);
 static void disableManualProxySettings(NSMutableDictionary* proxies);
 static BOOL saveProxyBackup(NSDictionary* sets);
@@ -17,8 +17,9 @@ static void cleanupInactiveProxySettings(NSMutableDictionary* proxies, NSString*
 static NSMutableDictionary* proxiesForMode(NSString* mode, NSDictionary* service, NSString* serviceID, NSDictionary* originalSets, int localPort, int httpPort);
 static BOOL applyProxyModeToServices(SCPreferencesRef prefRef, NSDictionary* sets, NSString* mode, NSDictionary* originalSets, int localPort, int httpPort);
 static BOOL createAuthorizedPreferences(SCPreferencesRef* prefRefOut);
-static BOOL configureNetworksetupProxyForService(NSString* serviceName, NSString* mode, int localPort, int httpPort);
-static BOOL applyDynamicProxyState(NSString* mode, int localPort, int httpPort);
+static BOOL configureNetworksetupProxyForService(NSString* serviceName, NSString* mode, int localPort, int httpPort, NSMutableDictionary* diagnostics, NSString** errorMessage);
+static BOOL applyDynamicProxyState(NSString* mode, int localPort, int httpPort, NSMutableDictionary* diagnostics, NSString** errorMessage);
+static void setProxyError(NSString** errorMessage, NSString* message);
 
 BOOL parseProxyPorts(const char* socksArg, const char* httpArg, int* localPort, int* httpPort) {
     int parsedLocalPort = 0;
@@ -54,18 +55,41 @@ BOOL runProxySaveMode(void) {
 }
 
 BOOL applySystemProxyMode(NSString* mode, NSDictionary* originalSets, int localPort, int httpPort) {
+    return applySystemProxyModeWithDiagnostics(mode, originalSets, localPort, httpPort, NULL, NULL);
+}
+
+BOOL applySystemProxyModeWithDiagnostics(NSString* mode, NSDictionary* originalSets, int localPort, int httpPort, NSString** errorMessage, NSDictionary** diagnosticsOut) {
+    NSMutableDictionary* diagnostics = [@{
+        @"stage": @"proxy.apply",
+        @"mode": mode ?: @"",
+    } mutableCopy];
     SCPreferencesRef prefRef = NULL;
     if (!createAuthorizedPreferences(&prefRef)) {
+        setProxyError(errorMessage, @"Failed to create authorized system proxy preferences.");
+        diagnostics[@"failure"] = @"create_authorized_preferences";
+        if (diagnosticsOut != NULL) {
+            *diagnosticsOut = diagnostics;
+        }
         return NO;
     }
     if (!SCPreferencesLock(prefRef, YES)) {
+        setProxyError(errorMessage, @"Failed to lock system proxy preferences.");
+        diagnostics[@"failure"] = @"lock_preferences";
         CFRelease(prefRef);
+        if (diagnosticsOut != NULL) {
+            *diagnosticsOut = diagnostics;
+        }
         return NO;
     }
     NSDictionary* sets = (__bridge NSDictionary*)SCPreferencesGetValue(prefRef, kSCPrefNetworkServices);
     if (sets == nil || !applyProxyModeToServices(prefRef, sets, mode, originalSets, localPort, httpPort)) {
+        setProxyError(errorMessage, sets == nil ? @"Failed to read network services from system preferences." : @"Failed to update proxy settings for network services.");
+        diagnostics[@"failure"] = sets == nil ? @"read_network_services" : @"apply_proxy_services";
         SCPreferencesUnlock(prefRef);
         CFRelease(prefRef);
+        if (diagnosticsOut != NULL) {
+            *diagnosticsOut = diagnostics;
+        }
         return NO;
     }
     BOOL ok = SCPreferencesCommitChanges(prefRef) && SCPreferencesApplyChanges(prefRef);
@@ -73,10 +97,22 @@ BOOL applySystemProxyMode(NSString* mode, NSDictionary* originalSets, int localP
     SCPreferencesUnlock(prefRef);
     CFRelease(prefRef);
     if (!ok) {
+        setProxyError(errorMessage, @"Failed to commit or apply system proxy preferences.");
+        diagnostics[@"failure"] = @"commit_or_apply_preferences";
+        if (diagnosticsOut != NULL) {
+            *diagnosticsOut = diagnostics;
+        }
         return NO;
     }
     if (![mode isEqualToString:@"restore"]) {
-        return applyDynamicProxyState(mode, localPort, httpPort);
+        BOOL dynamicOk = applyDynamicProxyState(mode, localPort, httpPort, diagnostics, errorMessage);
+        if (diagnosticsOut != NULL) {
+            *diagnosticsOut = diagnostics;
+        }
+        return dynamicOk;
+    }
+    if (diagnosticsOut != NULL) {
+        *diagnosticsOut = diagnostics;
     }
     return YES;
 }
@@ -100,8 +136,22 @@ static NSDictionary* runTool(NSString* launchPath, NSArray<NSString*>* arguments
     };
 }
 
-static BOOL runNetworksetup(NSArray<NSString*>* arguments) {
-    return [runTool(@"/usr/sbin/networksetup", arguments)[@"status"] intValue] == 0;
+static NSDictionary* runNetworksetup(NSArray<NSString*>* arguments) {
+    NSDictionary* result = runTool(@"/usr/sbin/networksetup", arguments);
+    return @{
+        @"ok": @([result[@"status"] intValue] == 0),
+        @"command": [@[@"/usr/sbin/networksetup"] arrayByAddingObjectsFromArray:arguments ?: @[]],
+        @"arguments": arguments ?: @[],
+        @"exitCode": result[@"status"] ?: @0,
+        @"stdout": result[@"stdout"] ?: @"",
+        @"stderr": result[@"stderr"] ?: @"",
+    };
+}
+
+static void setProxyError(NSString** errorMessage, NSString* message) {
+    if (errorMessage != NULL) {
+        *errorMessage = message ?: @"Failed to apply system proxy settings.";
+    }
 }
 
 static BOOL setProxyFlag(NSMutableDictionary* proxies, NSString* key, BOOL enabled) {
@@ -252,45 +302,88 @@ static BOOL createAuthorizedPreferences(SCPreferencesRef* prefRefOut) {
     return YES;
 }
 
-static BOOL configureNetworksetupProxyForService(NSString* serviceName, NSString* mode, int localPort, int httpPort) {
-    if (serviceName.length == 0) {
+static BOOL runNetworksetupStep(NSString* serviceName, NSString* actionName, NSArray<NSString*>* arguments, NSMutableArray* steps, NSString** errorMessage) {
+    NSDictionary* result = runNetworksetup(arguments);
+    NSMutableDictionary* step = [@{
+        @"action": actionName ?: @"networksetup",
+        @"service": serviceName ?: @"",
+        @"ok": result[@"ok"] ?: @NO,
+        @"command": result[@"command"] ?: @[],
+        @"arguments": result[@"arguments"] ?: @[],
+        @"exitCode": result[@"exitCode"] ?: @0,
+        @"stdout": result[@"stdout"] ?: @"",
+        @"stderr": result[@"stderr"] ?: @"",
+    } mutableCopy];
+    [steps addObject:step];
+    if (![result[@"ok"] boolValue]) {
+        NSString* stderrText = [result[@"stderr"] isKindOfClass:[NSString class]] ? result[@"stderr"] : @"";
+        NSString* trimmedStderr = [stderrText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSString* commandText = [result[@"command"] componentsJoinedByString:@" "] ?: @"networksetup";
+        NSString* message = [NSString stringWithFormat:@"networksetup failed for service \"%@\": %@ returned %@%@%@", serviceName ?: @"", commandText, result[@"exitCode"] ?: @0, trimmedStderr.length > 0 ? @": " : @"", trimmedStderr.length > 0 ? trimmedStderr : @""];
+        setProxyError(errorMessage, message);
         return NO;
     }
+    return YES;
+}
+
+static BOOL configureNetworksetupProxyForService(NSString* serviceName, NSString* mode, int localPort, int httpPort, NSMutableDictionary* diagnostics, NSString** errorMessage) {
+    if (serviceName.length == 0) {
+        setProxyError(errorMessage, @"Missing network service name for networksetup proxy update.");
+        return NO;
+    }
+    NSMutableArray* steps = [[NSMutableArray alloc] init];
+    NSMutableDictionary* serviceDiagnostic = [@{
+        @"service": serviceName,
+        @"mode": mode ?: @"",
+        @"steps": steps,
+    } mutableCopy];
+    NSMutableArray* services = diagnostics[@"networksetupServices"];
+    if (![services isKindOfClass:[NSMutableArray class]]) {
+        services = [[NSMutableArray alloc] init];
+        diagnostics[@"networksetupServices"] = services;
+    }
+    [services addObject:serviceDiagnostic];
     BOOL ok = YES;
-    ok = runNetworksetup(@[@"-setautoproxystate", serviceName, @"off"]) && ok;
-    ok = runNetworksetup(@[@"-setwebproxystate", serviceName, @"off"]) && ok;
-    ok = runNetworksetup(@[@"-setsecurewebproxystate", serviceName, @"off"]) && ok;
-    ok = runNetworksetup(@[@"-setsocksfirewallproxystate", serviceName, @"off"]) && ok;
+    ok = runNetworksetupStep(serviceName, @"setautoproxystate", @[@"-setautoproxystate", serviceName, @"off"], steps, errorMessage) && ok;
+    ok = runNetworksetupStep(serviceName, @"setwebproxystate", @[@"-setwebproxystate", serviceName, @"off"], steps, errorMessage) && ok;
+    ok = runNetworksetupStep(serviceName, @"setsecurewebproxystate", @[@"-setsecurewebproxystate", serviceName, @"off"], steps, errorMessage) && ok;
+    ok = runNetworksetupStep(serviceName, @"setsocksfirewallproxystate", @[@"-setsocksfirewallproxystate", serviceName, @"off"], steps, errorMessage) && ok;
     if ([mode isEqualToString:@"auto"]) {
-        ok = runNetworksetup(@[@"-setautoproxyurl", serviceName, @"http://127.0.0.1:8070/proxy.pac"]) && ok;
-        ok = runNetworksetup(@[@"-setautoproxystate", serviceName, @"on"]) && ok;
+        ok = runNetworksetupStep(serviceName, @"setautoproxyurl", @[@"-setautoproxyurl", serviceName, @"http://127.0.0.1:8070/proxy.pac"], steps, errorMessage) && ok;
+        ok = runNetworksetupStep(serviceName, @"setautoproxystate", @[@"-setautoproxystate", serviceName, @"on"], steps, errorMessage) && ok;
+        serviceDiagnostic[@"ok"] = @(ok);
         return ok;
     }
     if ([mode isEqualToString:@"global"]) {
         if (httpPort > 0) {
             NSString* httpPortString = [NSString stringWithFormat:@"%d", httpPort];
-            ok = runNetworksetup(@[@"-setwebproxy", serviceName, @"127.0.0.1", httpPortString]) && ok;
-            ok = runNetworksetup(@[@"-setsecurewebproxy", serviceName, @"127.0.0.1", httpPortString]) && ok;
-            ok = runNetworksetup(@[@"-setwebproxystate", serviceName, @"on"]) && ok;
-            ok = runNetworksetup(@[@"-setsecurewebproxystate", serviceName, @"on"]) && ok;
+            ok = runNetworksetupStep(serviceName, @"setwebproxy", @[@"-setwebproxy", serviceName, @"127.0.0.1", httpPortString], steps, errorMessage) && ok;
+            ok = runNetworksetupStep(serviceName, @"setsecurewebproxy", @[@"-setsecurewebproxy", serviceName, @"127.0.0.1", httpPortString], steps, errorMessage) && ok;
+            ok = runNetworksetupStep(serviceName, @"setwebproxystate", @[@"-setwebproxystate", serviceName, @"on"], steps, errorMessage) && ok;
+            ok = runNetworksetupStep(serviceName, @"setsecurewebproxystate", @[@"-setsecurewebproxystate", serviceName, @"on"], steps, errorMessage) && ok;
         }
         if (localPort > 0) {
             NSString* localPortString = [NSString stringWithFormat:@"%d", localPort];
-            ok = runNetworksetup(@[@"-setsocksfirewallproxy", serviceName, @"127.0.0.1", localPortString]) && ok;
-            ok = runNetworksetup(@[@"-setsocksfirewallproxystate", serviceName, @"on"]) && ok;
+            ok = runNetworksetupStep(serviceName, @"setsocksfirewallproxy", @[@"-setsocksfirewallproxy", serviceName, @"127.0.0.1", localPortString], steps, errorMessage) && ok;
+            ok = runNetworksetupStep(serviceName, @"setsocksfirewallproxystate", @[@"-setsocksfirewallproxystate", serviceName, @"on"], steps, errorMessage) && ok;
         }
     }
+    serviceDiagnostic[@"ok"] = @(ok);
     return ok;
 }
 
-static BOOL applyDynamicProxyState(NSString* mode, int localPort, int httpPort) {
+static BOOL applyDynamicProxyState(NSString* mode, int localPort, int httpPort, NSMutableDictionary* diagnostics, NSString** errorMessage) {
     SCPreferencesRef prefRef = SCPreferencesCreate(NULL, CFSTR("V2RayXS"), NULL);
     if (prefRef == NULL) {
+        setProxyError(errorMessage, @"Failed to read network services for networksetup proxy refresh.");
+        diagnostics[@"failure"] = @"dynamic_create_preferences";
         return NO;
     }
     SCNetworkSetRef currentSet = SCNetworkSetCopyCurrent(prefRef);
     if (currentSet == NULL) {
         CFRelease(prefRef);
+        setProxyError(errorMessage, @"Failed to read current network set for networksetup proxy refresh.");
+        diagnostics[@"failure"] = @"dynamic_current_network_set";
         return NO;
     }
     NSArray* services = CFBridgingRelease(SCNetworkSetCopyServices(currentSet));
@@ -308,7 +401,17 @@ static BOOL applyDynamicProxyState(NSString* mode, int localPort, int httpPort) 
             continue;
         }
         didApply = YES;
-        ok = configureNetworksetupProxyForService(serviceName, mode, localPort, httpPort) && ok;
+        ok = configureNetworksetupProxyForService(serviceName, mode, localPort, httpPort, diagnostics, errorMessage) && ok;
+    }
+    diagnostics[@"dynamicRefresh"] = @{
+        @"ok": @(didApply && ok),
+        @"didApply": @(didApply),
+    };
+    if (!didApply) {
+        setProxyError(errorMessage, @"No enabled network services are available for networksetup proxy refresh.");
+        diagnostics[@"failure"] = @"dynamic_no_enabled_services";
+    } else if (!ok) {
+        diagnostics[@"failure"] = @"dynamic_networksetup_failed";
     }
     return didApply && ok;
 }

@@ -192,6 +192,23 @@ static NSDictionary* helperClientReceiveFileDescriptorAndPayload(int socketFD) {
     return nil;
 }
 
+- (NSDictionary*)runJSONCommandAllowingFailureWithArguments:(NSArray<NSString*>*)arguments action:(NSString*)action {
+    NSDictionary* taskResult = [self taskResultForArguments:arguments];
+    int exitCode = [taskResult[@"exitCode"] intValue];
+    NSDictionary* payload = [self parsedJSONPayloadFromTaskResult:taskResult];
+    if (exitCode == 0 || [self isExpectedTunStartSignalExitForArguments:arguments exitCode:exitCode]) {
+        return payload;
+    }
+
+    [self presentFailureMessage:[self errorMessageForArguments:arguments action:action taskResult:taskResult]];
+    if ([payload isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary* mutablePayload = [payload mutableCopy];
+        mutablePayload[@"_exitCode"] = @(exitCode);
+        return mutablePayload;
+    }
+    return nil;
+}
+
 - (BOOL)runHelperDaemonWithAction:(NSString*)action {
     NSString* launchError = nil;
     if (![self launchDetachedCommandWithArguments:@[@"daemon", @"run"] error:&launchError]) {
@@ -314,17 +331,43 @@ static NSDictionary* helperClientReceiveFileDescriptorAndPayload(int socketFD) {
 
 - (NSDictionary*)activateTunWithLeaseId:(NSString*)leaseId action:(NSString*)action {
     NSArray<NSString*>* arguments = leaseId.length > 0 ? @[@"tun", @"activate", leaseId, @"--json"] : @[@"tun", @"activate", @"--json"];
-    return [self runJSONCommandWithArguments:arguments action:action];
+    return [self runJSONCommandAllowingFailureWithArguments:arguments action:action];
+}
+
+- (BOOL)tunActivationResponseIsActive:(NSDictionary*)response {
+    NSString* session = [response[@"session"] isKindOfClass:[NSString class]] ? response[@"session"] : @"";
+    NSDictionary* status = [response[@"status"] isKindOfClass:[NSDictionary class]] ? response[@"status"] : response;
+    NSString* statusSession = [status[@"session"] isKindOfClass:[NSString class]] ? status[@"session"] : @"";
+    return [session isEqualToString:@"active"] || [statusSession isEqualToString:@"active"];
+}
+
+- (BOOL)shouldRetryTunActivationForResponse:(NSDictionary*)response {
+    if (![response isKindOfClass:[NSDictionary class]]) {
+        return NO;
+    }
+    NSString* code = [response[@"code"] isKindOfClass:[NSString class]] ? response[@"code"] : @"";
+    NSString* message = [response[@"message"] isKindOfClass:[NSString class]] ? response[@"message"] : @"";
+    NSArray<NSString*>* terminalCodes = @[@"proxy.disable_failed", @"tun.lease_missing", @"tun.lease_mismatch", @"tun.activate_failed", @"route.install_failed", @"session.already_active", @"proxy.networksetup_failed"];
+    if ([terminalCodes containsObject:code]) {
+        return NO;
+    }
+    NSArray<NSString*>* terminalMessages = @[@"No pending tun lease", @"Requested lease does not match", @"Failed to disable existing system proxy", @"Failed to bring up tun interface", @"Failed to synchronize whitelist routes"];
+    for (NSString* terminalMessage in terminalMessages) {
+        if ([message containsString:terminalMessage]) {
+            return NO;
+        }
+    }
+    return YES;
 }
 
 - (NSDictionary*)activateTunLeaseSynchronouslyWithLeaseId:(NSString*)leaseId action:(NSString*)action {
     NSDictionary* response = nil;
     for (NSInteger attempt = 0; attempt < 10; attempt += 1) {
         response = [self activateTunWithLeaseId:leaseId action:action];
-        NSString* session = [response[@"session"] isKindOfClass:[NSString class]] ? response[@"session"] : @"";
-        NSDictionary* status = [response[@"status"] isKindOfClass:[NSDictionary class]] ? response[@"status"] : response;
-        NSString* statusSession = [status[@"session"] isKindOfClass:[NSString class]] ? status[@"session"] : @"";
-        if ([session isEqualToString:@"active"] || [statusSession isEqualToString:@"active"]) {
+        if ([self tunActivationResponseIsActive:response]) {
+            return response;
+        }
+        if (![self shouldRetryTunActivationForResponse:response]) {
             return response;
         }
         [NSThread sleepForTimeInterval:0.3];

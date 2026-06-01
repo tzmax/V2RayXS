@@ -6,12 +6,12 @@
 static NSString* lastAllocatedLeaseIdentifier = nil;
 
 NSDictionary* tunCommandServiceHandle(NSArray<NSString*>* arguments,
-                                      NSDictionary* (^makeResponseBlock)(BOOL ok, NSString* message, NSDictionary* payload),
-                                      NSDictionary* (^statusRequestBlock)(void),
-                                      NSDictionary* (^startEmbeddedRequestBlock)(int localProxyPort),
-                                      NSDictionary* (^allocateFDRequestBlock)(NSString* preferredTunName, int* receivedFDOut),
-                                      NSDictionary* (^activateLeaseRequestBlock)(NSString* leaseId),
-                                      NSDictionary* (^stopRequestBlock)(void)) {
+                                       NSDictionary* (^makeResponseBlock)(BOOL ok, NSString* message, NSDictionary* payload),
+                                       NSDictionary* (^statusRequestBlock)(void),
+                                       NSDictionary* (^startEmbeddedRequestBlock)(int localProxyPort),
+                                       NSDictionary* (^allocateFDRequestBlock)(NSString* preferredTunName, int* receivedFDOut),
+                                       NSDictionary* (^activateLeaseRequestBlock)(NSString* leaseId),
+                                       NSDictionary* (^stopRequestBlock)(void)) {
     if (arguments.count < 2) {
         return makeResponseBlock(NO, @"Missing tun subcommand.", nil);
     }
@@ -24,7 +24,7 @@ NSDictionary* tunCommandServiceHandle(NSArray<NSString*>* arguments,
         }
     }
 
-    if ([subcommand isEqualToString:@"status"]) {
+    if ([subcommand isEqualToString:@"status"] || [subcommand isEqualToString:@"diagnose"]) {
         return statusRequestBlock();
     }
 

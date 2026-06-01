@@ -14,6 +14,7 @@ static NSString* daemonPendingTunName = @"";
 static NSString* daemonPendingLeaseIdentifier = @"";
 static int daemonPendingTunFD = -1;
 static int daemonActiveTunFD = -1;
+static NSDictionary* daemonLastError = nil;
 
 void daemonStateReset(void) {
     daemonSessionStatus = @"inactive";
@@ -66,6 +67,15 @@ BOOL daemonStateHasPendingLease(void) {
     return daemonPendingLeaseIdentifier.length > 0 && daemonPendingTunName.length > 0;
 }
 
+NSDictionary* daemonStatePendingLeasePayload(void) {
+    BOOL exists = daemonStateHasPendingLease();
+    return @{
+        @"exists": @(exists),
+        @"leaseId": exists ? daemonPendingLeaseIdentifier : @"",
+        @"tunName": exists ? daemonPendingTunName : @"",
+    };
+}
+
 BOOL daemonStateResolvePendingLease(NSString* requestedLeaseId, NSString** tunNameOut, NSString** leaseIdOut, NSString** errorMessage) {
     if (!daemonStateHasPendingLease()) {
         if (errorMessage != NULL) {
@@ -111,4 +121,21 @@ void daemonStateClearLease(void) {
 
 BOOL daemonStateIsActive(void) {
     return [daemonSessionStatus isEqualToString:@"active"];
+}
+
+void daemonStateRecordLastError(NSString* code, NSString* stage, NSString* message, NSDictionary* diagnostics) {
+    NSMutableDictionary* payload = [@{
+        @"code": code ?: @"unknown",
+        @"stage": stage ?: @"unknown",
+        @"message": message ?: @"",
+        @"timestamp": [[NSDate date] descriptionWithLocale:nil],
+    } mutableCopy];
+    if ([diagnostics isKindOfClass:[NSDictionary class]]) {
+        payload[@"diagnostics"] = diagnostics;
+    }
+    daemonLastError = [payload copy];
+}
+
+NSDictionary* daemonStateLastErrorPayload(void) {
+    return daemonLastError ?: @{};
 }
