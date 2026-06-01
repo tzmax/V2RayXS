@@ -88,6 +88,7 @@ pid_t spawnDetachedProcess(NSString* launchPath, NSArray<NSString*>* arguments);
 - (IBAction)didChangeStatus:(id)sender;
 - (IBAction)updateSubscriptions:(id)sender;
 - (IBAction)showHelp:(id)sender;
+- (IBAction)showAboutPanel:(id)sender;
 - (IBAction)showConfigWindow:(id)sender;
 - (IBAction)editPac:(id)sender;
 - (IBAction)resetPac:(id)sender;

@@ -491,9 +491,9 @@
 			buildPhases = (
 				9504C0741C662C3000352520 /* Sources */,
 				9504C0751C662C3000352520 /* Frameworks */,
-				9DB94D77209D273A0001E9DD /* Run Script */,
 				953B60541DB3E31D00D40654 /* Run Script */,
 				9504C0761C662C3000352520 /* Resources */,
+				34ABCD012345678900000001 /* Write Git Commit */,
 			);
 			buildRules = (
 			);
@@ -627,19 +627,20 @@
 			shellPath = /bin/sh;
 			shellScript = "\"$SRCROOT\"/V2RayX/dlcorex.sh\n";
 		};
-		9DB94D77209D273A0001E9DD /* Run Script */ = {
+		34ABCD012345678900000001 /* Write Git Commit */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
 			);
-			name = "Run Script";
+			name = "Write Git Commit";
 			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/git_commit.txt",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "buildNumber=$(/usr/libexec/PlistBuddy -c \"Print CFBundleVersion\" \"$INFOPLIST_FILE\")\nbuildNumber=$CURRENT_PROJECT_VERSION\nbuildNumber=$(($buildNumber + 1))\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"$INFOPLIST_FILE\"\n";
+			shellScript = "commit=$(git -C \"$SRCROOT\" rev-parse --short=8 HEAD 2>/dev/null || true)\nprintf \"%s\" \"$commit\" > \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/git_commit.txt\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -891,7 +892,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 0;
+				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = V2RayX/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -915,7 +916,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 0;
+				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = V2RayX/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

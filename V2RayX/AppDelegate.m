@@ -1526,6 +1526,28 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/tzmax/V2RayXS/releases/latest"]];
 }
 
+- (IBAction)showAboutPanel:(id)sender {
+    NSBundle* bundle = [NSBundle mainBundle];
+    NSString* version = [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    NSString* build = [bundle objectForInfoDictionaryKey:@"CFBundleVersion"];
+    NSString* versionLine = version.length > 0 ? [NSString stringWithFormat:@"Version %@", version] : @"Version Unknown";
+    if (build.length > 0) {
+        versionLine = [versionLine stringByAppendingFormat:@" (%@)", build];
+    }
+
+    NSString* commitPath = [bundle pathForResource:@"git_commit" ofType:@"txt"];
+    NSString* commit = commitPath.length > 0 ? [NSString stringWithContentsOfFile:commitPath encoding:NSUTF8StringEncoding error:nil] : nil;
+    commit = [commit stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (commit.length > 0) {
+        versionLine = [versionLine stringByAppendingFormat:@" %@", commit];
+    }
+
+    [[NSApplication sharedApplication] orderFrontStandardAboutPanelWithOptions:@{
+        @"ApplicationVersion": versionLine,
+        @"Version": @""
+    }];
+}
+
 - (IBAction)checkUpgrade:(id)sender {
     NSURL* url =[NSURL URLWithString:@"https://api.github.com/repos/tzmax/v2rayxs/releases/latest"];
     NSURLSessionDataTask* task = [[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {

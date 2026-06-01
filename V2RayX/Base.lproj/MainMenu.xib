@@ -43,7 +43,7 @@
                             <menuItem title="About V2RayXS" id="5kV-Vb-QxS">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
-                                    <action selector="orderFrontStandardAboutPanel:" target="-1" id="Exp-CZ-Vem"/>
+                                    <action selector="showAboutPanel:" target="Voe-Tx-rLC" id="Exp-CZ-Vem"/>
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="VOq-y0-SEH"/>
@@ -783,7 +783,7 @@
                 <menuItem title="About" id="esg-xy-8ve">
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <connections>
-                        <action selector="orderFrontStandardAboutPanel:" target="-1" id="5zv-YX-e5a"/>
+                        <action selector="showAboutPanel:" target="Voe-Tx-rLC" id="5zv-YX-e5a"/>
                     </connections>
                 </menuItem>
                 <menuItem isSeparatorItem="YES" id="Dsn-rn-Ieo"/>
