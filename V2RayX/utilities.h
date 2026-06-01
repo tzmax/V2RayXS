@@ -45,6 +45,7 @@
 
 NSUInteger searchInArray(NSString* str, NSArray* array);
 NSMutableDictionary* normalizedStreamSettingsForXray(NSDictionary* streamSettings);
+NSMutableDictionary* normalizedStreamSettingsForXrayForCore(NSDictionary* streamSettings, BOOL rejectsTLSAllowInsecure);
 
 
 #endif /* utilities_h */

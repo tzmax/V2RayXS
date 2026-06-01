@@ -8,6 +8,9 @@
 
 @interface TransportWindowController () {
     ConfigWindowController* configWindowController;
+    TLSCertSha256Endpoint* currentCertSha256Endpoint;
+    NSUInteger autoPinRefreshGeneration;
+    BOOL transportWindowClosing;
 }
 
 @end
@@ -64,6 +67,42 @@
     }
 }
 
+- (NSDictionary*)activeTLSSettingsFromStreamSettings:(NSDictionary*)streamSettings {
+    if ([streamSettings[@"security"] isEqualToString:@"xtls"]) {
+        return [streamSettings[@"xtlsSettings"] isKindOfClass:[NSDictionary class]] ? streamSettings[@"xtlsSettings"] : @{};
+    }
+    return [streamSettings[@"tlsSettings"] isKindOfClass:[NSDictionary class]] ? streamSettings[@"tlsSettings"] : @{};
+}
+
+- (TLSCertSha256Endpoint*)certSha256EndpointForCurrentSettings {
+    TLSCertSha256Endpoint* endpoint = [[TLSCertSha256Endpoint alloc] init];
+    endpoint.host = configWindowController.selectedProfile.address ?: @"";
+    endpoint.port = configWindowController.selectedProfile.port;
+    endpoint.serverName = [[_tlsServerNameField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] length] > 0 ? [_tlsServerNameField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] : endpoint.host;
+    endpoint.security = _tlsSecurityButton.selectedItem.title ?: @"tls";
+    endpoint.outboundTag = configWindowController.selectedProfile.outboundTag ?: @"";
+    return endpoint;
+}
+
+- (void)updateAutoPinUIWithEntry:(TLSCertSha256CacheEntry*)entry {
+    if (entry != nil && [entry hasSha256]) {
+        _tlsPinnedPeerCertSha256Field.placeholderString = [TLSCertSha256 placeholderForSha256:entry.sha256];
+        [_tlsAutoPinStatusField setStringValue:[TLSCertSha256 statusTextForEntry:entry]];
+    } else {
+        _tlsPinnedPeerCertSha256Field.placeholderString = @"";
+        [_tlsAutoPinStatusField setStringValue:@""];
+    }
+}
+
+- (BOOL)canUpdateAutoPinUIForGeneration:(NSUInteger)generation {
+    return !transportWindowClosing && generation == autoPinRefreshGeneration && self.window.sheetParent != nil;
+}
+
+- (void)cancelPendingAutoPinRefresh {
+    transportWindowClosing = YES;
+    autoPinRefreshGeneration += 1;
+}
+
 - (void)fillStream:(NSDictionary*)streamSettings andMuxSettings:(NSDictionary*)muxSettings {
     //kcp
     [_kcpMtuField setIntegerValue:[streamSettings[@"kcpSettings"][@"mtu"] integerValue]];
@@ -118,6 +157,13 @@
     [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"http/1.1")];
     [_tlsServerNameField setStringValue:streamSettings[@"tlsSettings"][@"serverName"]];
     [_realityFingerprint setStringValue:nilCoalescing(tlsSettings[@"fingerprint"], @"chrome")];
+    NSDictionary* activeTLSSettings = [self activeTLSSettingsFromStreamSettings:streamSettings];
+    NSString* manualPin = nilCoalescing(activeTLSSettings[@"pinnedPeerCertSha256"], @"");
+    [_tlsPinnedPeerCertSha256Field setStringValue:manualPin ?: @""];
+    [_tlsVerifyPeerCertByNameField setStringValue:nilCoalescing(activeTLSSettings[@"verifyPeerCertByName"], @"")];
+    _tlsVerifyPeerCertByNameField.placeholderString = @"";
+    currentCertSha256Endpoint = [self certSha256EndpointForCurrentSettings];
+    [self updateAutoPinUIWithEntry:[[TLSCertSha256 sharedCache] cachedEntryForEndpoint:currentCertSha256Endpoint]];
     
     // tls panel settings
     [self loadTLSPanel];
@@ -142,6 +188,11 @@
         [_tlsServerNameField setStringValue:streamSettings[@"xtlsSettings"][@"serverName"]];
         [_realityFingerprint setStringValue:nilCoalescing(xtlsSettings[@"fingerprint"], @"chrome")];
     }
+    currentCertSha256Endpoint = [self certSha256EndpointForCurrentSettings];
+    BOOL shouldFetchAutoPin = [_tlsPinnedPeerCertSha256Field.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].length == 0 && [_tlsAiButton state] == 1;
+    if (shouldFetchAutoPin) {
+        [self refreshAutoPinnedPeerCertSha256:self];
+    }
 
     // mux
     [_muxEnableButton setState:[nilCoalescing(muxSettings[@"enabled"], @NO) boolValue]];
@@ -156,6 +207,33 @@
     [_tfoEnableButton setState:[tfoSettings[@"tcpFastOpen"] boolValue]];
 }
 
+- (IBAction)refreshAutoPinnedPeerCertSha256:(id)sender {
+    transportWindowClosing = NO;
+    autoPinRefreshGeneration += 1;
+    NSUInteger generation = autoPinRefreshGeneration;
+    currentCertSha256Endpoint = [self certSha256EndpointForCurrentSettings];
+    NSLog(@"TLS auto pin refresh requested generation=%lu endpoint=%@ key=%@", (unsigned long)generation, [currentCertSha256Endpoint displayAddress], [currentCertSha256Endpoint cacheKey]);
+    if (currentCertSha256Endpoint.host.length == 0 || currentCertSha256Endpoint.port == 0) {
+        NSLog(@"TLS auto pin refresh skipped generation=%lu: missing host or port", (unsigned long)generation);
+        [self updateAutoPinUIWithEntry:nil];
+        return;
+    }
+
+    [_tlsRefreshAutoPinButton setEnabled:NO];
+    [_tlsAutoPinStatusField setStringValue:@"Auto Pin: fetching..."];
+    __weak typeof(self) weakSelf = self;
+    [[TLSCertSha256 sharedCache] fetchForEndpoint:currentCertSha256Endpoint refresh:YES completion:^(TLSCertSha256CacheEntry* entry) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil || ![strongSelf canUpdateAutoPinUIForGeneration:generation]) {
+            NSLog(@"TLS auto pin refresh callback ignored generation=%lu", (unsigned long)generation);
+            return;
+        }
+        NSLog(@"TLS auto pin refresh callback generation=%lu hasSha256=%@ error=%@", (unsigned long)generation, [entry hasSha256] ? @"YES" : @"NO", entry.errorMessage ?: @"");
+        [strongSelf->_tlsRefreshAutoPinButton setEnabled:YES];
+        [strongSelf updateAutoPinUIWithEntry:entry];
+    }];
+}
+
 - (IBAction)tReset:(id)sender {
     ServerProfile *p = [[ServerProfile alloc] init];
     [self fillStream:p.streamSettings andMuxSettings:p.muxSettings];
@@ -166,12 +244,14 @@
 }
 
 - (IBAction)tCancel:(id)sender {
+    [self cancelPendingAutoPinRefresh];
     [self.window.sheetParent endSheet:self.window returnCode:NSModalResponseCancel];
 }
 
 - (IBAction)ok:(id)sender {
     NSLog(@"%@", [_httpPathField stringValue]);
     if ([self checkInputs]) {
+        [self cancelPendingAutoPinRefresh];
         [self.window.sheetParent endSheet:self.window returnCode:NSModalResponseOK];
     }
 }
@@ -236,6 +316,29 @@
     } else {
         httpSettings = @{ @"path": [self->_httpPathField stringValue] };
     }
+    NSMutableDictionary* tlsSettingsToSave = [@{
+            @"serverName": [_tlsServerNameField stringValue],
+            @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
+            @"allowInsecureCiphers": [NSNumber numberWithBool:[self->_tlsAllowInsecureCiphersButton state]==1],
+            @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
+    } mutableCopy];
+    NSMutableDictionary* xtlsSettingsToSave = [@{
+            @"serverName": [_tlsServerNameField stringValue],
+            @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
+            @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
+    } mutableCopy];
+
+    NSString* enteredPin = [[_tlsPinnedPeerCertSha256Field stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (enteredPin.length > 0) {
+        tlsSettingsToSave[@"pinnedPeerCertSha256"] = enteredPin;
+        xtlsSettingsToSave[@"pinnedPeerCertSha256"] = enteredPin;
+    }
+    NSString* verifyPeerCertByName = [[_tlsVerifyPeerCertByNameField stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (verifyPeerCertByName.length > 0) {
+        tlsSettingsToSave[@"verifyPeerCertByName"] = verifyPeerCertByName;
+        xtlsSettingsToSave[@"verifyPeerCertByName"] = verifyPeerCertByName;
+    }
+
     NSMutableDictionary *streamSettingsImmutable = [NSMutableDictionary dictionaryWithDictionary: @{
         @"kcpSettings":
             @{@"mtu":[NSNumber numberWithInteger:[self->_kcpMtuField integerValue]],
@@ -261,17 +364,8 @@
                         }
                 },
         @"security": [[self->_tlsSecurityButton selectedItem] title],
-        @"tlsSettings": @{
-                @"serverName": [_tlsServerNameField stringValue],
-                @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
-                @"allowInsecureCiphers": [NSNumber numberWithBool:[self->_tlsAllowInsecureCiphersButton state]==1],
-                @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
-                },
-        @"xtlsSettings": @{
-                @"serverName": [_tlsServerNameField stringValue],
-                @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
-                @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
-                },
+        @"tlsSettings": tlsSettingsToSave,
+        @"xtlsSettings": xtlsSettingsToSave,
         @"grpcSettings": @{
                 @"serviceName": [[_grpcServiceNameField stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]],
                 @"multiMode":[NSNumber numberWithBool:[self->_grpcMultiMode indexOfSelectedItem] != 0],

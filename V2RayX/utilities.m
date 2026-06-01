@@ -6,6 +6,13 @@
 
 #import "utilities.h"
 
+static NSString* trimmedStringValue(id value) {
+    if (![value isKindOfClass:[NSString class]]) {
+        return @"";
+    }
+    return [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 NSUInteger searchInArray(NSString* str, NSArray* array) {
     if ([str isKindOfClass:[NSString class]]) {
         NSUInteger index = 0;
@@ -30,6 +37,34 @@ NSMutableDictionary* normalizedStreamSettingsForXray(NSDictionary* streamSetting
         [kcpSettings removeObjectForKey:@"header"];
         kcpSettings[@"headerConfig"] = @{@"type": headerType.length > 0 ? headerType : @"none"};
         normalized[@"kcpSettings"] = kcpSettings;
+    }
+
+    return normalized;
+}
+
+NSMutableDictionary* normalizedStreamSettingsForXrayForCore(NSDictionary* streamSettings, BOOL rejectsTLSAllowInsecure) {
+    NSMutableDictionary* normalized = normalizedStreamSettingsForXray(streamSettings);
+
+    NSArray* tlsSettingNames = @[@"tlsSettings", @"xtlsSettings"];
+    for (NSString* settingName in tlsSettingNames) {
+        NSMutableDictionary* tlsSettings = [normalized[settingName] isKindOfClass:[NSDictionary class]] ? [normalized[settingName] mutableDeepCopy] : nil;
+        if (tlsSettings != nil) {
+            NSString* manualPin = trimmedStringValue(tlsSettings[@"pinnedPeerCertSha256"]);
+            if (manualPin.length > 0) {
+                tlsSettings[@"pinnedPeerCertSha256"] = manualPin;
+            } else {
+                [tlsSettings removeObjectForKey:@"pinnedPeerCertSha256"];
+            }
+            [tlsSettings removeObjectForKey:@"autoPinnedPeerCertSha256"];
+            [tlsSettings removeObjectForKey:@"pinnedPeerCertSha256Source"];
+            NSString* verifyPeerCertByName = trimmedStringValue(tlsSettings[@"verifyPeerCertByName"]);
+            if (verifyPeerCertByName.length > 0) {
+                tlsSettings[@"verifyPeerCertByName"] = verifyPeerCertByName;
+            } else {
+                [tlsSettings removeObjectForKey:@"verifyPeerCertByName"];
+            }
+            normalized[settingName] = tlsSettings;
+        }
     }
 
     return normalized;

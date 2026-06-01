@@ -26,16 +26,18 @@
         [self setStreamSettings:@{
                                   @"security": @"none",
                                   @"tlsSettings": @{
-                                          @"serverName": @"server.cc",
-                                          @"alpn": @[@"http/1.1"],
-                                          @"allowInsecure": [NSNumber numberWithBool:NO],
-                                          @"allowInsecureCiphers": [NSNumber numberWithBool:NO]
-                                          },
-                                  @"xtlsSettings": @{
-                                          @"serverName": @"server.cc",
-                                          @"alpn": @[@"http/1.1"],
-                                          @"allowInsecure": [NSNumber numberWithBool:NO]
-                                          },
+                                           @"serverName": @"server.cc",
+                                           @"alpn": @[@"http/1.1"],
+                                           @"allowInsecure": [NSNumber numberWithBool:NO],
+                                           @"verifyPeerCertByName": @"",
+                                           @"allowInsecureCiphers": [NSNumber numberWithBool:NO]
+                                           },
+                                    @"xtlsSettings": @{
+                                           @"serverName": @"server.cc",
+                                           @"alpn": @[@"http/1.1"],
+                                           @"allowInsecure": [NSNumber numberWithBool:NO],
+                                           @"verifyPeerCertByName": @""
+                                           },
                                   @"tcpSettings": @{
                                           @"header": @{
                                                   @"type": @"none"

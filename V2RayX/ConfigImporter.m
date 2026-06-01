@@ -590,6 +590,14 @@
         if ([settingsName isNotEqualTo:@""]) {
             streamSettings[settingsName][@"allowInsecure"] = nilCoalescing(sharedServer[@"allowInsecure"], @NO);
             streamSettings[settingsName][@"allowInsecureCiphers"] = nilCoalescing(sharedServer[@"allowInsecureCiphers"], @NO);
+            NSString* pinnedPeerCertSha256 = nilCoalescing(sharedServer[@"pinnedPeerCertSha256"], sharedServer[@"pcs"]);
+            if ([pinnedPeerCertSha256 isKindOfClass:[NSString class]] && pinnedPeerCertSha256.length > 0) {
+                streamSettings[settingsName][@"pinnedPeerCertSha256"] = pinnedPeerCertSha256;
+            }
+            NSString* verifyPeerCertByName = nilCoalescing(sharedServer[@"verifyPeerCertByName"], sharedServer[@"vcn"]);
+            if ([verifyPeerCertByName isKindOfClass:[NSString class]] && verifyPeerCertByName.length > 0) {
+                streamSettings[settingsName][@"verifyPeerCertByName"] = verifyPeerCertByName;
+            }
             streamSettings[settingsName][@"serverName"] = nilCoalescing(sharedServer[@"sni"], newProfile.address);
             streamSettings[settingsName][@"fingerprint"] = nilCoalescing(sharedServer[@"fp"], @"chrome");
             if ([sharedServer objectForKey:@"alpn"]) {

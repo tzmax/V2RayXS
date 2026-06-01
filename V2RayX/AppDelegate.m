@@ -14,6 +14,7 @@
 #import "MutableDeepCopying.h"
 #import "ConfigImporter.h"
 #import "NSData+AES256Encryption.h"
+#import "TLSCertSha256.h"
 #import <sys/stat.h>
 #import <sys/wait.h>
 #import <sys/socket.h>
@@ -113,6 +114,17 @@ typedef struct {
 - (BOOL)isUsingXrayTunMode;
 - (void)applyNonXrayNetworkMode;
 - (void)stopEmbeddedTunSessionIfNeeded;
+- (BOOL)isUsingCustomJSONConfig;
+- (NSData*)runtimeCoreConfigData;
+- (NSData*)displayConfigData;
+- (NSDictionary*)managedRuntimeConfigObject;
+- (BOOL)isManagedProfileOutbound:(NSDictionary*)outbound;
+- (NSMutableDictionary*)runtimeOutboundFromStoredOutbound:(NSDictionary*)outbound rejectsAllowInsecure:(BOOL)rejectsAllowInsecure;
+- (NSMutableDictionary*)runtimeManagedProfileOutbound:(NSDictionary*)outbound rejectsAllowInsecure:(BOOL)rejectsAllowInsecure;
+- (TLSCertSha256Endpoint*)tlsCertSha256EndpointForOutbound:(NSDictionary*)outbound settingName:(NSString*)settingName tlsSettings:(NSDictionary*)tlsSettings;
+- (NSMutableDictionary*)runtimeTLSSettingsFromStoredTLSSettings:(NSDictionary*)tlsSettings outbound:(NSDictionary*)outbound settingName:(NSString*)settingName rejectsAllowInsecure:(BOOL)rejectsAllowInsecure;
+- (void)appendRuntimeTLSWarning:(NSString*)message;
+- (NSArray*)allSelectableOutbounds;
 
 @end
 
@@ -122,6 +134,7 @@ static AppDelegate *appDelegate;
 static BOOL helperTunSessionActive = NO;
 static NSDictionary* helperTunSessionStatus = nil;
 static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
+static NSString* const kMinimumRemovedTLSAllowInsecureVersion = @"26.3.27";
 static int const kXrayTunFDTarget = 3;
 
 static NSString* const kStoredTunLeaseIdKey = @"xrayTunLeaseId";
@@ -479,6 +492,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
+    [[NSProcessInfo processInfo] disableAutomaticTermination:@"V2RayXS runs as a menu bar app."];
     [[NSUserNotificationCenter defaultUserNotificationCenter] setDelegate:self];
     
     // check helper
@@ -576,7 +590,14 @@ static int normalizedExitCodeFromWaitStatus(int status) {
             }
             [self ensureCoreLogDirectoryExists];
             NSString* temporaryConfigPath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"v2rayxs-xray-%@.json", [[NSUUID UUID] UUIDString]]];
-            NSData* configData = [NSJSONSerialization dataWithJSONObject:[self generateConfigFile] options:0 error:nil];
+            NSData* configData = [self runtimeCoreConfigData];
+            if (configData == nil) {
+                NSString* message = @"Failed to build Xray config.";
+                NSLog(@"%@", message);
+                [self appendCoreLogLine:message];
+                [self reportHelperFailureMessage:message];
+                continue;
+            }
             [configData writeToFile:temporaryConfigPath atomically:YES];
             self->coreConfigPath = temporaryConfigPath;
             NSArray* coreArguments = @[@"-config", temporaryConfigPath];
@@ -677,7 +698,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     // read defaults
     [self readDefaults];
     self.encryptionKey = @"";
-    if (_enableEncryption && ([profiles count] > 0 || [_subscriptions count] > 0)) {
+    if (_enableEncryption && ([profiles count] > 0 || [customOutbounds count] > 0 || [_subscriptions count] > 0)) {
         NSUserNotification* notification = [[NSUserNotification alloc] init];
         notification.identifier = [NSString stringWithFormat:@"cenmrev.v2rayxs.passwork.%@", [NSUUID UUID]];
         notification.title = @"Input Password";
@@ -750,8 +771,36 @@ static int normalizedExitCodeFromWaitStatus(int status) {
             return false;
         }
     }
+    NSMutableArray* decryptedCustomOutbounds = [[NSMutableArray alloc] init];
+    for (NSString* encryptedJSON in customOutbounds) {
+        NSData* encryptedData = [[NSData alloc] initWithBase64EncodedString:encryptedJSON options:NSDataBase64DecodingIgnoreUnknownCharacters];
+        NSData* decryptedData = [encryptedData decryptedDataWithKey:key];
+        if (decryptedData) {
+            NSDictionary* decryptedOutbound = [NSJSONSerialization JSONObjectWithData:decryptedData options:0 error:nil];
+            if (decryptedOutbound) {
+                [decryptedCustomOutbounds addObject:decryptedOutbound];
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
     _subscriptions = decryptedLinks;
-    profiles = decryptedProfiles;
+    NSMutableArray* managedProfiles = [[NSMutableArray alloc] init];
+    NSMutableArray* splitCustomOutbounds = decryptedCustomOutbounds;
+    for (NSDictionary* outbound in decryptedProfiles) {
+        if (![outbound isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        if ([self isManagedProfileOutbound:outbound]) {
+            [managedProfiles addObject:outbound];
+        } else {
+            [splitCustomOutbounds addObject:outbound];
+        }
+    }
+    profiles = managedProfiles;
+    customOutbounds = splitCustomOutbounds;
     return true;
 }
 
@@ -1118,8 +1167,12 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
 - (NSArray<NSString*>*)tunWhitelistIPAddresses {
     NSMutableArray<NSString*>* serverAddresses = [[NSMutableArray alloc] init];
-    if (!useCusProfile) {
-        NSDictionary* fullConfig = [self generateConfigFile];
+    if ([self isUsingCustomJSONConfig]) {
+        NSData* customProfileData = [NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]];
+        NSDictionary* customJSON = customProfileData != nil ? [NSJSONSerialization JSONObjectWithData:customProfileData options:0 error:nil] : nil;
+        [self collectServerAddressesFromConfigObject:customJSON into:serverAddresses];
+    } else {
+        NSDictionary* fullConfig = [self managedRuntimeConfigObject];
         NSArray* generatedOutbounds = fullConfig[@"outbounds"];
         if ([generatedOutbounds isKindOfClass:[NSArray class]]) {
             for (NSDictionary* outbound in generatedOutbounds) {
@@ -1128,10 +1181,6 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                 }
             }
         }
-    } else if (selectedCusServerIndex >= 0 && selectedCusServerIndex < cusProfiles.count) {
-        NSData* customProfileData = [NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]];
-        NSDictionary* customJSON = customProfileData != nil ? [NSJSONSerialization JSONObjectWithData:customProfileData options:0 error:nil] : nil;
-        [self collectServerAddressesFromConfigObject:customJSON into:serverAddresses];
     }
     return [self resolvedIPAddressesFromHosts:serverAddresses];
 }
@@ -1559,7 +1608,36 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                     [profiles addObject:encrypted];
                 }
             }
+    }
+    }
+    customOutbounds = [[NSMutableArray alloc] init];
+    if ([[defaults objectForKey:@"customOutbounds"] isKindOfClass:[NSArray class]]) {
+        if (!_enableEncryption) {
+            for (NSDictionary* outbound in [defaults objectForKey:@"customOutbounds"]) {
+                if ([outbound isKindOfClass:[NSDictionary class]] && outbound[@"tag"] && [outbound[@"tag"] length] && [RESERVED_TAGS indexOfObject:outbound[@"tag"]] == NSNotFound) {
+                    [customOutbounds addObject:outbound];
+                }
+            }
+        } else {
+            for (NSString* encrypted in [defaults objectForKey:@"customOutbounds"]) {
+                if ([encrypted isKindOfClass:[NSString class]]) {
+                    [customOutbounds addObject:encrypted];
+                }
+            }
         }
+    } else {
+        NSMutableArray* managedProfiles = [[NSMutableArray alloc] init];
+        for (NSDictionary* outbound in profiles) {
+            if (![outbound isKindOfClass:[NSDictionary class]]) {
+                continue;
+            }
+            if ([self isManagedProfileOutbound:outbound]) {
+                [managedProfiles addObject:outbound];
+            } else {
+                [customOutbounds addObject:outbound];
+            }
+        }
+        profiles = managedProfiles;
     }
     
     cusProfiles = [[NSMutableArray alloc] init];
@@ -1611,6 +1689,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
       @"profiles":@[
               [[[ServerProfile alloc] init] outboundProfile]
               ],
+      @"customOutbounds": @[],
       @"cusProfiles": @[],
       @"enableRestore": @NO,
       @"routingRuleSets": @[ROUTING_GLOBAL, ROUTING_BYPASSCN_PRIVATE_APPLE, ROUTING_DIRECT],
@@ -1659,6 +1738,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     dispatch_async(taskQueue, ^{
         NSMutableArray* subscriptionToSave;
         NSMutableArray* profilesToSave;
+        NSMutableArray* customOutboundsToSave;
         if (self->_enableEncryption) {
             subscriptionToSave = [[NSMutableArray alloc] init];
             for (NSString* link in self->_subscriptions) {
@@ -1669,9 +1749,15 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                 NSData* jsonData = [NSJSONSerialization dataWithJSONObject:profile options:0 error:nil];
                 [profilesToSave addObject:[[jsonData encryptedDataWithKey:self->_encryptionKey] base64EncodedStringWithOptions:0]];
             }
+            customOutboundsToSave = [[NSMutableArray alloc] init];
+            for (NSDictionary* outbound in self->customOutbounds) {
+                NSData* jsonData = [NSJSONSerialization dataWithJSONObject:outbound options:0 error:nil];
+                [customOutboundsToSave addObject:[[jsonData encryptedDataWithKey:self->_encryptionKey] base64EncodedStringWithOptions:0]];
+            }
         } else {
             subscriptionToSave = self->_subscriptions;
             profilesToSave = self->profiles;
+            customOutboundsToSave = self->customOutbounds;
         }
         NSDictionary *settings =
         @{
@@ -1685,6 +1771,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
           @"shareOverLan": @(self.shareOverLan),
           @"dnsString": self.dnsString,
           @"profiles":profilesToSave,
+          @"customOutbounds": customOutboundsToSave,
           @"cusProfiles": self.cusProfiles,
           @"subscriptions": subscriptionToSave,
           @"routingRuleSets": self.routingRuleSets,
@@ -1879,14 +1966,15 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 - (void)normalizeCurrentRuntimeSelections {
-    selectedServerIndex = MIN((NSInteger)profiles.count + (NSInteger)_subsOutbounds.count - 1, selectedServerIndex);
-    if (profiles.count + _subsOutbounds.count > 0) {
+    NSUInteger outboundCount = profiles.count + customOutbounds.count + _subsOutbounds.count;
+    selectedServerIndex = MIN((NSInteger)outboundCount - 1, selectedServerIndex);
+    if (outboundCount > 0) {
         selectedServerIndex = MAX(selectedServerIndex, 0);
     }
     selectedCusServerIndex = MIN((NSInteger)cusProfiles.count - 1, selectedCusServerIndex);
     _selectedRoutingSet = MIN((NSInteger)_routingRuleSets.count - 1, _selectedRoutingSet);
 
-    if ((!useMultipleServer && selectedServerIndex == -1 && selectedCusServerIndex == -1) || (useMultipleServer && profiles.count + _subsOutbounds.count < 1)) {
+    if ((!useMultipleServer && selectedServerIndex == -1 && selectedCusServerIndex == -1) || (useMultipleServer && outboundCount < 1)) {
         proxyState = false;
     } else if (!useMultipleServer && selectedCusServerIndex == -1) {
         useCusProfile = false;
@@ -2288,7 +2376,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
 - (void)updateServerMenuList {
     [_serverListMenu removeAllItems];
-    if ([profiles count] == 0 && [cusProfiles count] == 0 && [_subsOutbounds count] == 0) {
+    if ([profiles count] == 0 && [customOutbounds count] == 0 && [cusProfiles count] == 0 && [_subsOutbounds count] == 0) {
         [_serverListMenu addItem:[[NSMenuItem alloc] initWithTitle:@"no available servers, please add server profiles through config window." action:nil keyEquivalent:@""]];
         if (_subscriptions.count > 0) {
             [_serverListMenu addItem:[NSMenuItem separatorItem]];
@@ -2298,6 +2386,18 @@ static int normalizedExitCodeFromWaitStatus(int status) {
         int i = 0;
         for (NSDictionary *p in profiles) {
             NSString *itemTitle = nilCoalescing(p[@"tag"], @"");
+            NSMenuItem *newItem = [[NSMenuItem alloc] initWithTitle:itemTitle action:@selector(switchServer:) keyEquivalent:@""];
+            [newItem setTag:i];
+            if (useMultipleServer){
+                newItem.state = 0;
+            } else {
+                newItem.state = (!useCusProfile && i == selectedServerIndex);
+            }
+            [_serverListMenu addItem:newItem];
+            i += 1;
+        }
+        for (NSDictionary *p in customOutbounds) {
+            NSString *itemTitle = nilCoalescing(p[@"tag"], @"custom outbound");
             NSMenuItem *newItem = [[NSMenuItem alloc] initWithTitle:itemTitle action:@selector(switchServer:) keyEquivalent:@""];
             [newItem setTag:i];
             if (useMultipleServer){
@@ -2320,7 +2420,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
             [_serverListMenu addItem:newItem];
             i += 1;
         }
-        if([profiles count] + [_subsOutbounds count]> 0) {
+        if([profiles count] + [customOutbounds count] + [_subsOutbounds count]> 0) {
             NSMenuItem *newItem = [[NSMenuItem alloc] initWithTitle:@"Use All" action:@selector(switchServer:) keyEquivalent:@""];
             [newItem setTag:kUseAllServer];
             newItem.state = useMultipleServer & !useCusProfile;
@@ -2340,7 +2440,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
             if (useMultipleServer){
                 newItem.state = 0;
             } else {
-                newItem.state = (useCusProfile && i - [profiles count] - [_subsOutbounds count] == selectedCusServerIndex)? 1 : 0;
+                newItem.state = (useCusProfile && i - [profiles count] - [customOutbounds count] - [_subsOutbounds count] == selectedCusServerIndex)? 1 : 0;
             }
             [_serverListMenu addItem:newItem];
             i += 1;
@@ -2353,12 +2453,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     [self reconcileTunSessionForCurrentRuntime];
     BOOL shouldRefreshTunSession = [self shouldMaintainTunRoutingSession];
     if (proxyState == true) {
-        if (!useMultipleServer && useCusProfile) {
-            v2rayJSONconfig = [NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]];
-        } else {
-            NSDictionary *fullConfig = [self generateConfigFile];
-            v2rayJSONconfig = [NSJSONSerialization dataWithJSONObject:fullConfig options:NSJSONWritingPrettyPrinted error:nil];
-        }
+        v2rayJSONconfig = [self displayConfigData] ?: [[NSData alloc] init];
         //[self generateLaunchdPlist:plistPath];
         [self toggleCore];
         if (shouldRefreshTunSession && !suppressAutomaticTunRefreshDuringCoreConfigChange) {
@@ -2399,6 +2494,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     
     NSMutableDictionary *backup = [[NSMutableDictionary alloc] init];
     backup[@"outbounds"] = self.profiles;
+    backup[@"customOutbounds"] = self.customOutbounds;
     backup[@"routings"] = self.routingRuleSets;
     NSData* backupData = [NSJSONSerialization dataWithJSONObject:backup options:NSJSONWritingPrettyPrinted error:nil];
     NSString* backupPath = [NSString stringWithFormat:@"%@/v2rayxs_backup_%@.json", NSHomeDirectory(), dateString];
@@ -2413,7 +2509,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 }
 
 - (void)switchServer:(id)sender {
-    NSInteger outboundCount = [profiles count] + [_subsOutbounds count];
+    NSInteger outboundCount = [profiles count] + [customOutbounds count] + [_subsOutbounds count];
     if ([sender tag] >= 0 && [sender tag] < outboundCount) {
         [self setUseMultipleServer:NO];
         [self setUseCusProfile:NO];
@@ -2450,7 +2546,31 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 //    });
 }
 
+- (BOOL)isUsingCustomJSONConfig {
+    return !useMultipleServer && useCusProfile && selectedCusServerIndex >= 0 && selectedCusServerIndex < cusProfiles.count;
+}
+
+- (NSData*)runtimeCoreConfigData {
+    if ([self isUsingCustomJSONConfig]) {
+        return [NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]];
+    }
+    NSDictionary* fullConfig = [self managedRuntimeConfigObject];
+    return fullConfig != nil ? [NSJSONSerialization dataWithJSONObject:fullConfig options:0 error:nil] : nil;
+}
+
+- (NSData*)displayConfigData {
+    if ([self isUsingCustomJSONConfig]) {
+        return [NSData dataWithContentsOfFile:cusProfiles[selectedCusServerIndex]];
+    }
+    NSDictionary* fullConfig = [self managedRuntimeConfigObject];
+    return fullConfig != nil ? [NSJSONSerialization dataWithJSONObject:fullConfig options:NSJSONWritingPrettyPrinted error:nil] : nil;
+}
+
 - (NSDictionary*)generateConfigFile {
+    return [self managedRuntimeConfigObject];
+}
+
+- (NSDictionary*)managedRuntimeConfigObject {
     NSMutableDictionary* fullConfig = [NSMutableDictionary dictionaryWithContentsOfFile:[[NSBundle mainBundle] pathForResource:@"config-sample_new" ofType:@"plist"]];
     fullConfig[@"log"] = @{
                            @"access": [NSString stringWithFormat:@"%@/access.log", logDirPath],
@@ -2493,9 +2613,11 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     // deal with outbound
     NSMutableDictionary* configOutboundDict = [[NSMutableDictionary alloc] init];
     NSMutableDictionary* allUniqueTagOutboundDict = [[NSMutableDictionary alloc] init]; // make sure tag is unique
-    NSMutableArray* allOutbounds = [profiles mutableCopy];
-    [allOutbounds addObjectsFromArray:_subsOutbounds];
+    NSArray* allOutbounds = [self allSelectableOutbounds];
     for (NSDictionary* outbound in profiles) {
+        allUniqueTagOutboundDict[outbound[@"tag"]] = [outbound mutableDeepCopy];
+    }
+    for (NSDictionary* outbound in customOutbounds) {
         allUniqueTagOutboundDict[outbound[@"tag"]] = [outbound mutableDeepCopy];
     }
     for (NSDictionary* outbound in _subsOutbounds) {
@@ -2539,6 +2661,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
             }
         }
     }
+    BOOL rejectsTLSAllowInsecure = [self currentCoreRejectsTLSAllowInsecure];
     if (usebalance) {
         // if balancer is used, add all outbounds into config file, and add all tags to the balancer selector
         fullConfig[@"routing"][@"balancers"] = @[@{
@@ -2547,8 +2670,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
                                                      }];
         NSMutableArray* normalizedOutbounds = [[NSMutableArray alloc] init];
         for (NSDictionary* outbound in allUniqueTagOutboundDict.allValues) {
-            NSMutableDictionary* normalizedOutbound = [outbound mutableDeepCopy];
-            normalizedOutbound[@"streamSettings"] = normalizedStreamSettingsForXray(outbound[@"streamSettings"]);
+            NSMutableDictionary* normalizedOutbound = [self runtimeOutboundFromStoredOutbound:outbound rejectsAllowInsecure:rejectsTLSAllowInsecure];
             [normalizedOutbounds addObject:normalizedOutbound];
         }
         fullConfig[@"outbounds"] = normalizedOutbounds;
@@ -2556,13 +2678,20 @@ static int normalizedExitCodeFromWaitStatus(int status) {
         // otherwise, we convert all collected outbounds into an array
         NSMutableArray* normalizedOutbounds = [[NSMutableArray alloc] init];
         for (NSDictionary* outbound in configOutboundDict.allValues) {
-            NSMutableDictionary* normalizedOutbound = [outbound mutableDeepCopy];
-            normalizedOutbound[@"streamSettings"] = normalizedStreamSettingsForXray(outbound[@"streamSettings"]);
+            NSMutableDictionary* normalizedOutbound = [self runtimeOutboundFromStoredOutbound:outbound rejectsAllowInsecure:rejectsTLSAllowInsecure];
             [normalizedOutbounds addObject:normalizedOutbound];
         }
         fullConfig[@"outbounds"] = normalizedOutbounds;
     }
     return fullConfig;
+}
+
+- (NSArray*)allSelectableOutbounds {
+    NSMutableArray* outbounds = [[NSMutableArray alloc] init];
+    [outbounds addObjectsFromArray:profiles ?: @[]];
+    [outbounds addObjectsFromArray:customOutbounds ?: @[]];
+    [outbounds addObjectsFromArray:_subsOutbounds ?: @[]];
+    return outbounds;
 }
 
 //-(void)generateLaunchdPlist:(NSString*)path {
@@ -2636,6 +2765,139 @@ static int normalizedExitCodeFromWaitStatus(int status) {
 
     NSString* detectedVersion = [versionLine substringWithRange:[match rangeAtIndex:1]];
     return [detectedVersion compare:kMinimumSupportedXrayTunVersion options:NSNumericSearch] != NSOrderedAscending;
+}
+
+- (NSString*)currentCoreSemanticVersion {
+    NSString* versionLine = [self currentCoreVersionString];
+    if (versionLine.length == 0) {
+        return @"";
+    }
+    NSRegularExpression* versionRegex = [NSRegularExpression regularExpressionWithPattern:@"([0-9]+(?:\\.[0-9]+)+)" options:0 error:nil];
+    NSTextCheckingResult* match = [versionRegex firstMatchInString:versionLine options:0 range:NSMakeRange(0, versionLine.length)];
+    if (match == nil || match.numberOfRanges < 2) {
+        return @"";
+    }
+    return [versionLine substringWithRange:[match rangeAtIndex:1]];
+}
+
+- (BOOL)currentCoreRejectsTLSAllowInsecure {
+    if (![self isCurrentCoreXray]) {
+        return NO;
+    }
+    NSString* detectedVersion = [self currentCoreSemanticVersion];
+    if (detectedVersion.length == 0) {
+        return YES;
+    }
+    return [detectedVersion compare:kMinimumRemovedTLSAllowInsecureVersion options:NSNumericSearch] != NSOrderedAscending;
+}
+
+- (BOOL)isManagedProfileOutbound:(NSDictionary*)outbound {
+    if (![outbound isKindOfClass:[NSDictionary class]]) {
+        return NO;
+    }
+    if (outbound[@"x-ignore-node"] != nil) {
+        return NO;
+    }
+    NSString* protocol = [outbound[@"protocol"] isKindOfClass:[NSString class]] ? outbound[@"protocol"] : @"";
+    if (!([protocol isEqualToString:@"vmess"] || [protocol isEqualToString:@"vless"])) {
+        return NO;
+    }
+    NSDictionary* settings = [outbound[@"settings"] isKindOfClass:[NSDictionary class]] ? outbound[@"settings"] : nil;
+    NSArray* vnext = [settings[@"vnext"] isKindOfClass:[NSArray class]] ? settings[@"vnext"] : nil;
+    if (vnext.count != 1) {
+        return NO;
+    }
+    return [ServerProfile profilesFromJson:outbound].count > 0;
+}
+
+- (NSMutableDictionary*)runtimeOutboundFromStoredOutbound:(NSDictionary*)outbound rejectsAllowInsecure:(BOOL)rejectsAllowInsecure {
+    if ([self isManagedProfileOutbound:outbound]) {
+        return [self runtimeManagedProfileOutbound:outbound rejectsAllowInsecure:rejectsAllowInsecure];
+    }
+    return [outbound mutableDeepCopy];
+}
+
+- (NSMutableDictionary*)runtimeManagedProfileOutbound:(NSDictionary*)outbound rejectsAllowInsecure:(BOOL)rejectsAllowInsecure {
+    NSMutableDictionary* runtimeOutbound = [outbound mutableDeepCopy];
+    NSMutableDictionary* streamSettings = [runtimeOutbound[@"streamSettings"] isKindOfClass:[NSDictionary class]] ? [runtimeOutbound[@"streamSettings"] mutableDeepCopy] : nil;
+    if (streamSettings == nil) {
+        return runtimeOutbound;
+    }
+    NSString* security = [streamSettings[@"security"] isKindOfClass:[NSString class]] ? streamSettings[@"security"] : @"";
+    if ([security isEqualToString:@"tls"]) {
+        NSDictionary* storedTLSSettings = [streamSettings[@"tlsSettings"] isKindOfClass:[NSDictionary class]] ? streamSettings[@"tlsSettings"] : @{};
+        streamSettings[@"tlsSettings"] = [self runtimeTLSSettingsFromStoredTLSSettings:storedTLSSettings outbound:runtimeOutbound settingName:@"tlsSettings" rejectsAllowInsecure:rejectsAllowInsecure];
+    } else if ([security isEqualToString:@"xtls"]) {
+        NSDictionary* storedTLSSettings = [streamSettings[@"xtlsSettings"] isKindOfClass:[NSDictionary class]] ? streamSettings[@"xtlsSettings"] : @{};
+        streamSettings[@"xtlsSettings"] = [self runtimeTLSSettingsFromStoredTLSSettings:storedTLSSettings outbound:runtimeOutbound settingName:@"xtlsSettings" rejectsAllowInsecure:rejectsAllowInsecure];
+    }
+    runtimeOutbound[@"streamSettings"] = normalizedStreamSettingsForXrayForCore(streamSettings, rejectsAllowInsecure);
+    return runtimeOutbound;
+}
+
+- (NSMutableDictionary*)runtimeTLSSettingsFromStoredTLSSettings:(NSDictionary*)tlsSettings outbound:(NSDictionary*)outbound settingName:(NSString*)settingName rejectsAllowInsecure:(BOOL)rejectsAllowInsecure {
+    NSMutableDictionary* runtimeTLSSettings = [tlsSettings isKindOfClass:[NSDictionary class]] ? [tlsSettings mutableDeepCopy] : [[NSMutableDictionary alloc] init];
+    [runtimeTLSSettings removeObjectForKey:@"autoPinnedPeerCertSha256"];
+    [runtimeTLSSettings removeObjectForKey:@"pinnedPeerCertSha256Source"];
+
+    NSString* manualPin = [runtimeTLSSettings[@"pinnedPeerCertSha256"] isKindOfClass:[NSString class]] ? [runtimeTLSSettings[@"pinnedPeerCertSha256"] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] : @"";
+    NSString* verifyPeerCertByName = [runtimeTLSSettings[@"verifyPeerCertByName"] isKindOfClass:[NSString class]] ? [runtimeTLSSettings[@"verifyPeerCertByName"] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] : @"";
+    BOOL allowInsecure = [runtimeTLSSettings[@"allowInsecure"] boolValue];
+
+    if (manualPin.length > 0) {
+        runtimeTLSSettings[@"pinnedPeerCertSha256"] = manualPin;
+    } else {
+        [runtimeTLSSettings removeObjectForKey:@"pinnedPeerCertSha256"];
+        if (rejectsAllowInsecure && allowInsecure) {
+            TLSCertSha256Endpoint* endpoint = [self tlsCertSha256EndpointForOutbound:outbound settingName:settingName tlsSettings:runtimeTLSSettings];
+            TLSCertSha256CacheEntry* entry = [[TLSCertSha256 sharedCache] fetchForEndpoint:endpoint refresh:NO];
+            if ([entry hasSha256]) {
+                runtimeTLSSettings[@"pinnedPeerCertSha256"] = entry.sha256;
+            } else {
+                NSString* warning = [NSString stringWithFormat:@"WARN: Failed to auto fetch pinnedPeerCertSha256 for managed outbound \"%@\" %@ with SNI %@: %@", outbound[@"tag"] ?: @"", [entry.endpoint displayAddress], entry.endpoint.serverName ?: @"", entry.errorMessage ?: @"unknown error"];
+                [self appendRuntimeTLSWarning:warning];
+            }
+        }
+    }
+
+    if (verifyPeerCertByName.length > 0) {
+        runtimeTLSSettings[@"verifyPeerCertByName"] = verifyPeerCertByName;
+    } else {
+        [runtimeTLSSettings removeObjectForKey:@"verifyPeerCertByName"];
+    }
+
+    if (rejectsAllowInsecure && allowInsecure) {
+        NSString* warning = [NSString stringWithFormat:@"WARN: TLS allowInsecure is removed for current core; adapting managed outbound \"%@\" %@ by removing allowInsecure.", outbound[@"tag"] ?: @"", settingName ?: @""];
+        [self appendRuntimeTLSWarning:warning];
+        [runtimeTLSSettings removeObjectForKey:@"allowInsecure"];
+    } else if (!allowInsecure) {
+        [runtimeTLSSettings removeObjectForKey:@"allowInsecure"];
+    }
+    return runtimeTLSSettings;
+}
+
+- (TLSCertSha256Endpoint*)tlsCertSha256EndpointForOutbound:(NSDictionary*)outbound settingName:(NSString*)settingName tlsSettings:(NSDictionary*)tlsSettings {
+    NSDictionary* settings = [outbound[@"settings"] isKindOfClass:[NSDictionary class]] ? outbound[@"settings"] : nil;
+    NSArray* vnext = [settings[@"vnext"] isKindOfClass:[NSArray class]] ? settings[@"vnext"] : nil;
+    NSDictionary* server = vnext.count > 0 && [vnext[0] isKindOfClass:[NSDictionary class]] ? vnext[0] : nil;
+    NSString* host = [server[@"address"] isKindOfClass:[NSString class]] ? server[@"address"] : @"";
+    NSString* serverName = [tlsSettings[@"serverName"] isKindOfClass:[NSString class]] && [tlsSettings[@"serverName"] length] > 0 ? tlsSettings[@"serverName"] : host;
+
+    TLSCertSha256Endpoint* endpoint = [[TLSCertSha256Endpoint alloc] init];
+    endpoint.host = host;
+    endpoint.port = [server[@"port"] respondsToSelector:@selector(unsignedIntegerValue)] ? [server[@"port"] unsignedIntegerValue] : 0;
+    endpoint.serverName = serverName;
+    endpoint.security = [settingName isEqualToString:@"xtlsSettings"] ? @"xtls" : @"tls";
+    endpoint.outboundTag = [outbound[@"tag"] isKindOfClass:[NSString class]] ? outbound[@"tag"] : @"";
+    return endpoint;
+}
+
+- (void)appendRuntimeTLSWarning:(NSString*)message {
+    if (message.length == 0) {
+        return;
+    }
+    NSLog(@"%@", message);
+    [self appendCoreLogLine:message];
 }
 
 - (IBAction)authorizeV2sys:(id)sender {
@@ -2810,6 +3072,7 @@ int runCommandLine(NSString* launchPath, NSArray* arguments) {
 @synthesize selectedPacFileName;
 @synthesize dnsString;
 @synthesize profiles;
+@synthesize customOutbounds;
 @synthesize logLevel;
 @synthesize cusProfiles;
 @synthesize useCusProfile;

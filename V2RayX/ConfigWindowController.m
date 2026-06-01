@@ -78,7 +78,10 @@
             !isIgnoreNode
         ) {
             [_profiles addObject:[ServerProfile profilesFromJson:p][0]];
-        } else {
+        }
+    }
+    for (NSDictionary *p in _appDelegate.customOutbounds) {
+        if ([p isKindOfClass:[NSDictionary class]]) {
             [_outbounds addObject:p];
         }
     }
@@ -239,9 +242,12 @@
     if (![self checkTLSforHttp2]) {
         return;
     }
+    NSMutableArray *managedOutbounds = [[NSMutableArray alloc] init];
     NSMutableArray *allOutbounds = [[NSMutableArray alloc] init];
     for (ServerProfile* p in _profiles) {
-        [allOutbounds addObject:[p outboundProfile]];
+        NSMutableDictionary* outbound = [p outboundProfile];
+        [managedOutbounds addObject:outbound];
+        [allOutbounds addObject:outbound];
     }
     for (NSMutableDictionary* p in _outbounds) {
         [allOutbounds addObject:p];
@@ -262,7 +268,8 @@
         }
         allOutboundDict[outbound[@"tag"]] = outbound;
     }
-    _appDelegate.profiles = allOutbounds;
+    _appDelegate.profiles = managedOutbounds;
+    _appDelegate.customOutbounds = _outbounds;
     NSString* dnsStr = [[_dnsField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""];
     if ([dnsStr length] == 0) {
         dnsStr = @"localhost";

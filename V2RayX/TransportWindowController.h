@@ -7,6 +7,7 @@
 #import <Cocoa/Cocoa.h>
 #import "ConfigWindowController.h"
 #import "utilities.h"
+#import "TLSCertSha256.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -54,8 +55,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property (weak) IBOutlet NSButton *tlsAllowInsecureCiphersButton;
 @property (weak) IBOutlet NSTextField *tlsAlpnField;
 @property (weak) IBOutlet NSTextField *tlsServerNameField;
+@property (weak) IBOutlet NSTextField *tlsPinnedPeerCertSha256Field;
+@property (weak) IBOutlet NSTextField *tlsVerifyPeerCertByNameField;
+@property (weak) IBOutlet NSTextField *tlsAutoPinStatusField;
+@property (weak) IBOutlet NSButton *tlsRefreshAutoPinButton;
+@property (weak) IBOutlet NSView *tlsConfigurationPanel;
 
 - (IBAction)tlsSecurityChange:(NSPopUpButton *)sender;
+- (IBAction)refreshAutoPinnedPeerCertSha256:(id)sender;
 
 
 //reality fields
