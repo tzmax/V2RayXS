@@ -16,6 +16,7 @@
         [self setAddress:@"server.cc"];
         [self setPort:10086];
         [self setUserId:@"00000000-0000-0000-0000-000000000000"];
+        [self setUserEncryption:@"none"];
         [self setAlterId:64];
         [self setLevel:0];
         [self setOutboundTag:@"test server"];
@@ -72,6 +73,15 @@
                                   @"grpcSettings": @{
                                           @"multiMode": [NSNumber numberWithBool:NO],
                                           },
+                                  @"httpupgradeSettings": @{
+                                          @"path": @"/",
+                                          @"host": @""
+                                          },
+                                  @"xhttpSettings": @{
+                                          @"path": @"/",
+                                          @"host": @"",
+                                          @"mode": @"auto"
+                                          },
                                   @"sockopt": @{},
                                   @"realitySettings": @{}
                                   }];
@@ -108,6 +118,7 @@
             continue;
         }
         profile.userId = nilCoalescing(vnext[@"users"][0][@"id"], @"23ad6b10-8d1a-40f7-8ad0-e3e35cd38287");
+        profile.userEncryption = nilCoalescing(vnext[@"users"][0][@"encryption"], @"none");
         profile.alterId = [vnext[@"users"][0][@"alterId"] unsignedIntegerValue];
         profile.level = [vnext[@"users"][0][@"level"] unsignedIntegerValue];
         profile.flow = searchInArray(vnext[@"users"][0][@"flow"], VLESS_FLOW_LIST);
@@ -140,6 +151,7 @@
     aCopy.address = [NSString stringWithString:nilCoalescing(self.address, @"")];
     aCopy.port = self.port;
     aCopy.userId = [NSString stringWithString:nilCoalescing(self.userId, @"")];
+    aCopy.userEncryption = [NSString stringWithString:nilCoalescing(self.userEncryption, @"none")];
     aCopy.alterId = self.alterId;
     aCopy.level = self.level;
     aCopy.outboundTag = [NSString stringWithString:nilCoalescing(self.outboundTag, @"")];
@@ -155,29 +167,37 @@
 - (NSMutableDictionary*)outboundProfile {
     NSMutableDictionary* fullStreamSettings = normalizedStreamSettingsForXray(streamSettings);
     fullStreamSettings[@"network"] = NETWORK_LIST[network];
+    NSMutableDictionary* user = [@{
+        @"id": userId != nil ? [userId stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]: @"",
+        @"level": [NSNumber numberWithUnsignedInteger:level],
+    } mutableCopy];
+    if (protocol == vmess) {
+        user[@"alterId"] = [NSNumber numberWithUnsignedInteger:alterId];
+        user[@"security"] = VMESS_SECURITY_LIST[security];
+    } else {
+        user[@"flow"] = VLESS_FLOW_LIST[flow];
+        user[@"encryption"] = nilCoalescing(userEncryption, @"none");
+    }
+
+    NSMutableDictionary* settings = [@{
+        @"vnext": @[
+                @{
+                    @"address": nilCoalescing([address stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] , @""),
+                    @"port": [NSNumber numberWithUnsignedInteger:port],
+                    @"users": @[user]
+                }
+        ]
+    } mutableCopy];
+    if (protocol == vmess) {
+        settings[@"security"] = VMESS_SECURITY_LIST[security];
+    }
+
     NSDictionary* result =
     @{
       @"sendThrough": sendThrough,
       @"tag": nilCoalescing(outboundTag, @""),
       @"protocol": PROTOCOL_LIST[protocol],
-      @"settings": [@{
-              @"vnext": @[
-                      @{
-                          @"address": nilCoalescing([address stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] , @""),
-                          @"port": [NSNumber numberWithUnsignedInteger:port],
-                          @"users": @[
-                                  @{
-                                      @"id": userId != nil ? [userId stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]: @"",
-                                      @"alterId": [NSNumber numberWithUnsignedInteger:alterId],
-                                      @"flow": VLESS_FLOW_LIST[flow],
-                                      @"security": VMESS_SECURITY_LIST[security],
-                                      @"level": [NSNumber numberWithUnsignedInteger:level],
-                                      @"encryption": @"none"
-                                      }
-                                  ]
-                          }
-                      ]
-              } mutableCopy],
+      @"settings": settings,
       @"streamSettings": fullStreamSettings,
       @"mux": muxSettings,
       };
@@ -194,6 +214,7 @@
 @synthesize address;
 @synthesize port;
 @synthesize userId;
+@synthesize userEncryption;
 @synthesize alterId;
 @synthesize level;
 @synthesize outboundTag;

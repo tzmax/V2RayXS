@@ -31,12 +31,43 @@ NSMutableDictionary* normalizedStreamSettingsForXray(NSDictionary* streamSetting
 
     NSMutableDictionary* kcpSettings = [normalized[@"kcpSettings"] isKindOfClass:[NSDictionary class]] ? [normalized[@"kcpSettings"] mutableDeepCopy] : nil;
     if (kcpSettings != nil) {
-        [kcpSettings removeObjectForKey:@"seed"];
         NSMutableDictionary* kcpHeader = [kcpSettings[@"header"] isKindOfClass:[NSDictionary class]] ? [kcpSettings[@"header"] mutableDeepCopy] : nil;
         NSString* headerType = [kcpHeader[@"type"] isKindOfClass:[NSString class]] ? kcpHeader[@"type"] : @"none";
-        [kcpSettings removeObjectForKey:@"header"];
-        kcpSettings[@"headerConfig"] = @{@"type": headerType.length > 0 ? headerType : @"none"};
+        if (kcpHeader != nil) {
+            kcpSettings[@"header"] = @{@"type": headerType.length > 0 ? headerType : @"none"};
+        }
         normalized[@"kcpSettings"] = kcpSettings;
+    }
+
+    NSMutableDictionary* wsSettings = [normalized[@"wsSettings"] isKindOfClass:[NSDictionary class]] ? [normalized[@"wsSettings"] mutableDeepCopy] : nil;
+    if (wsSettings != nil) {
+        NSMutableDictionary* headers = [wsSettings[@"headers"] isKindOfClass:[NSDictionary class]] ? [wsSettings[@"headers"] mutableDeepCopy] : nil;
+        NSString* host = [wsSettings[@"host"] isKindOfClass:[NSString class]] ? wsSettings[@"host"] : @"";
+        if (host.length == 0 && [headers[@"Host"] isKindOfClass:[NSString class]]) {
+            wsSettings[@"host"] = headers[@"Host"];
+        }
+        normalized[@"wsSettings"] = wsSettings;
+    }
+
+    NSArray* tlsSettingNames = @[@"tlsSettings", @"xtlsSettings", @"realitySettings"];
+    for (NSString* settingName in tlsSettingNames) {
+        NSMutableDictionary* settings = [normalized[settingName] isKindOfClass:[NSDictionary class]] ? [normalized[settingName] mutableDeepCopy] : nil;
+        if (settings == nil) {
+            continue;
+        }
+        NSArray* stringKeys = @[@"pinnedPeerCertSha256", @"verifyPeerCertByName", @"echConfigList", @"mldsa65Verify", @"password", @"publicKey", @"shortId", @"spiderX"];
+        for (NSString* key in stringKeys) {
+            NSString* value = trimmedStringValue(settings[key]);
+            if (value.length > 0) {
+                settings[key] = value;
+            } else {
+                [settings removeObjectForKey:key];
+            }
+        }
+        if ([settingName isEqualToString:@"realitySettings"] && settings[@"password"] == nil && settings[@"publicKey"] != nil) {
+            settings[@"password"] = settings[@"publicKey"];
+        }
+        normalized[settingName] = settings;
     }
 
     return normalized;

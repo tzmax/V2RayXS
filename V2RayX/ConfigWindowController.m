@@ -364,6 +364,12 @@
     [self askInputWithPrompt:@"Support standard vmess:// and ss:// link. Standard vmess:// link is still under discussion. Use \"Import from other links...\" to import other links, for example, vmess:// invented by v2rayN." handler:^(NSString *inputStr) {
         if (inputStr.length) {
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+                ServerProfile* standardProfile = [ConfigImporter importFromXrayShareLink:inputStr];
+                if (standardProfile) {
+                    [self.profiles addObject:standardProfile];
+                    [self presentImportResultOfVmessCount:1 otherCount:0 ruleSetCount:0];
+                    return;
+                }
                 NSMutableDictionary* ssOutbound = [ConfigImporter ssOutboundFromSSLink:inputStr];
                 if (ssOutbound) {
                     [self.outbounds addObject:ssOutbound];
@@ -394,7 +400,10 @@
         inputStr = [inputStr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         if ([inputStr length] != 0) {
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-                ServerProfile* p = [ConfigImporter importFromVmessOfV2RayN:inputStr];
+                ServerProfile* p = [ConfigImporter importFromXrayShareLink:inputStr];
+                if (!p) {
+                    p = [ConfigImporter importFromVmessOfV2RayN:inputStr];
+                }
                 NSInteger vmessCount = 0;
                 NSInteger otherCount = 0;
                 if (p) {
@@ -409,8 +418,9 @@
                 NSMutableDictionary* p2 = [ConfigImporter importFromHTTPSubscription:inputStr];
                 if (p2) {
                     [self.profiles addObjectsFromArray:p2[@"vmess"]];
+                    [self.profiles addObjectsFromArray:p2[@"vless"]];
                     [self.outbounds addObjectsFromArray:p2[@"other"]];
-                    vmessCount += [p2[@"vmess"] count];
+                    vmessCount += [p2[@"vmess"] count] + [p2[@"vless"] count];
                     otherCount += [p2[@"other"] count];
                 }
                 [self presentImportResultOfVmessCount:vmessCount otherCount:otherCount ruleSetCount:0];
@@ -440,8 +450,9 @@
                 NSMutableDictionary* p2 = [ConfigImporter importFromHTTPSubscription:inputStr];
                 if (p2) {
                     [self.profiles addObjectsFromArray:p2[@"vmess"]];
+                    [self.profiles addObjectsFromArray:p2[@"vless"]];
                     [self.outbounds addObjectsFromArray:p2[@"other"]];
-                    vmessCount += [p2[@"vmess"] count];
+                    vmessCount += [p2[@"vmess"] count] + [p2[@"vless"] count];
                     otherCount += [p2[@"other"] count];
                 }
                 [self presentImportResultOfVmessCount:vmessCount otherCount:otherCount ruleSetCount:0];

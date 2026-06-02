@@ -28,7 +28,9 @@ typedef enum FlowType : NSUInteger {
     xtls_rprx_origin,
     xtls_rprx_origin_udp443,
     xtls_rprx_splice,
-    xtls_rprx_splice_udp443
+    xtls_rprx_splice_udp443,
+    xtls_rprx_vision,
+    xtls_rprx_vision_udp443
 } FlowType;
 
 typedef enum NetWorkType : NSUInteger {
@@ -37,7 +39,9 @@ typedef enum NetWorkType : NSUInteger {
     ws,
     http,
     quic,
-    grpc
+    grpc,
+    httpupgrade,
+    xhttp
 } NetWorkType;
 
 @interface ServerProfile : NSObject
@@ -50,6 +54,7 @@ typedef enum NetWorkType : NSUInteger {
 @property (nonatomic) ProtocolType protocol;
 @property (nonatomic) NSUInteger port;
 @property (nonatomic) NSString* _Null_unspecified userId;
+@property (nonatomic) NSString* _Null_unspecified userEncryption;
 @property (nonatomic) NSUInteger alterId;
 @property (nonatomic) NSUInteger level;
 @property (nonatomic) NSString* _Null_unspecified outboundTag;

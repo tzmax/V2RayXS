@@ -6,6 +6,7 @@
 
 #import "ConfigImporter.h"
 #import "utilities.h"
+#import "XrayShareLinkParser.h"
 
 @implementation ConfigImporter
 
@@ -312,6 +313,15 @@
         for (id linkStr in decodedDataArray) {
             if ([linkStr length] != 0) {
                 @try {
+                    ServerProfile* standard = [ConfigImporter importFromXrayShareLink:linkStr];
+                    if (standard) {
+                        if (standard.protocol == vless) {
+                            [result[@"vless"] addObject:standard];
+                        } else {
+                            [result[@"vmess"] addObject:standard];
+                        }
+                        continue;
+                    }
                     ServerProfile* p = [ConfigImporter importFromVmessOfV2RayN:linkStr];
                     if (p) {
                         [result[@"vmess"] addObject:p];
@@ -337,6 +347,18 @@
         return result;
     }
     return nil;
+}
+
++ (ServerProfile*)importFromXrayShareLink:(NSString*)link {
+    NSError *parseError = nil;
+    XrayShareLinkParseResult *result = [XrayShareLinkParser parseLink:link error:&parseError];
+    if (result == nil) {
+        return nil;
+    }
+    for (NSString *warning in result.warnings) {
+        NSLog(@"Xray share link import warning: %@", warning);
+    }
+    return result.profile;
 }
 
 + (ServerProfile*)importFromVmessOfV2RayN:(NSString*)vmessStr {
@@ -440,6 +462,11 @@
 
 // 目前为初步提案, 详情请见 VMessAEAD / VLESS 分享链接标准提案 https://github.com/XTLS/Xray-core/discussions/716
 + (ServerProfile*)importFromVLESSOfXray:(NSString*)vlessStr {
+    ServerProfile *standardProfile = [ConfigImporter importFromXrayShareLink:vlessStr];
+    if (standardProfile) {
+        return standardProfile;
+    }
+
     // decode base64String
     NSString *base64String = [self decodeBase64String:vlessStr];
     if(base64String != nil && ![base64String isEqual: @""]) {

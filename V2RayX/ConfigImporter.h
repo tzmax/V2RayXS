@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary*)parseStandardSSLink:(NSString*)link;
 + (NSMutableDictionary*)ssOutboundFromSSLink:(NSString*)link;
 + (NSMutableDictionary*)ssOutboundFromSSConfig:(NSDictionary*)jsonObject;
++ (ServerProfile*)importFromXrayShareLink:(NSString*)link;
 + (ServerProfile*)importFromVmessOfV2RayN:(NSString*)vmessStr;
 + (ServerProfile*)importFromVLESSOfXray:(NSString*)vlessStr;
 + (NSMutableDictionary*)importFromHTTPSubscription:(NSString*)httpLink;

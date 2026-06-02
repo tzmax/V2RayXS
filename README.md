@@ -275,12 +275,6 @@ V2RayXS uses [GCDWebServer](https://github.com/swisspol/GCDWebServer) to provide
 
 > V2RayXS also uses many ideas and codes from [ShadowsocksX](https://github.com/shadowsocks/shadowsocks-iOS/tree/master), especially, ~~the codes of [v2rays_sysconfig](https://github.com/tzmax/V2RayXS/blob/master/v2rayx_sysconf/main.m) are simply copied from [shadowsocks_sysconf](https://github.com/shadowsocks/shadowsocks-iOS/blob/master/shadowsocks_sysconf/main.m) with some modifications.~~
 
-## Contributors
-
-We welcome all forms of sharing and appreciate the contributions of everyone involved.
-
-[![Contributors](https://contrib.rocks/image?repo=tzmax/V2RayXS)](https://github.com/tzmax/V2RayXS/graphs/contributors)
-
 ## Donation
 
 If Project V2Ray or V2RayX (V2RayXS) helped you, you can also help us by donation **in your will**. 
@@ -300,6 +294,12 @@ This repository is available under the [GPL-3.0 License](https://opensource.org/
 **No Warranties**: This software comes without any express or implied warranties, including but not limited to implied warranties of merchantability, fitness for a particular purpose, and non-infringement.
 
 **User Responsibilities**: By using this software, you agree to take full responsibility for any outcomes resulting from its use.
+
+## Contributors
+
+We welcome all forms of sharing and appreciate the contributions of everyone involved.
+
+[![Contributors](https://contrib.rocks/image?repo=tzmax/V2RayXS)](https://github.com/tzmax/V2RayXS/graphs/contributors)
 
 ## Stargazers over time
 
