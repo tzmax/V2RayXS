@@ -1,5 +1,5 @@
 #!/bin/bash
-VERSION="26.2.6"
+VERSION="26.3.27"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BOLD='\033[1m'
