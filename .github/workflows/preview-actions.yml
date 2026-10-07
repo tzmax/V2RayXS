@@ -1,0 +1,73 @@
+name: V2RayXS preview build
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "V2RayX/**"
+      - "v2rayx_sysconf/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-preview:
+    name: Build and publish preview
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build V2RayXS for x86_64 Arch
+        run: /usr/bin/env bash build.sh x86_64
+      - name: Build V2RayXS for arm64 Arch
+        run: /usr/bin/env bash build.sh arm64
+      - name: Update preview tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const ref = 'tags/preview';
+            try {
+              await github.rest.git.getRef({ owner, repo, ref });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.git.createRef({
+                owner, repo, ref: `refs/${ref}`, sha: context.sha
+              });
+              return;
+            }
+            await github.rest.git.updateRef({
+              owner, repo, ref, sha: context.sha, force: true
+            });
+      - name: Publish preview release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: preview
+          target_commitish: ${{ github.sha }}
+          name: Preview (master)
+          body: |
+            Automatically built from master after changes to V2RayX/ or v2rayx_sysconf/.
+
+            Commit: ${{ github.sha }}
+            Source: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+            Build: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Includes x86_64 and arm64 builds. This preview is replaced by the next successful build.
+          draft: false
+          prerelease: true
+          make_latest: false
+          append_body: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            build/out/V2RayXS_x86_64.app.zip
+            build/out/V2RayXS_x86_64.app.zip.dgst
+            build/out/V2RayXS_arm64.app.zip
+            build/out/V2RayXS_arm64.app.zip.dgst

@@ -1,6 +1,6 @@
 name: V2RayXS build actions
 
-on:   
+on:
   push:
     tags:
       - "v*.*.*"
@@ -14,15 +14,15 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
-      - name: Init
-        run: git submodule init && git submodule update
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Build V2RayXS for x86_64 Arch
         run: /usr/bin/env bash build.sh x86_64
       - name: Build V2RayXS for arm64 Arch
         run: /usr/bin/env bash build.sh arm64
       - name: Uploading assets...
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           name: Release ${{ github.ref }}
