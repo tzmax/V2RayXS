@@ -118,9 +118,10 @@ typedef struct {
 - (NSData*)runtimeCoreConfigData;
 - (NSData*)displayConfigData;
 - (NSDictionary*)managedRuntimeConfigObject;
+- (BOOL)currentCoreRejectsLegacyKCP;
 - (BOOL)isManagedProfileOutbound:(NSDictionary*)outbound;
-- (NSMutableDictionary*)runtimeOutboundFromStoredOutbound:(NSDictionary*)outbound rejectsAllowInsecure:(BOOL)rejectsAllowInsecure;
-- (NSMutableDictionary*)runtimeManagedProfileOutbound:(NSDictionary*)outbound rejectsAllowInsecure:(BOOL)rejectsAllowInsecure;
+- (NSMutableDictionary*)runtimeOutboundFromStoredOutbound:(NSDictionary*)outbound rejectsAllowInsecure:(BOOL)rejectsAllowInsecure rejectsLegacyKCP:(BOOL)rejectsLegacyKCP;
+- (NSMutableDictionary*)runtimeManagedProfileOutbound:(NSDictionary*)outbound rejectsAllowInsecure:(BOOL)rejectsAllowInsecure rejectsLegacyKCP:(BOOL)rejectsLegacyKCP;
 - (TLSCertSha256Endpoint*)tlsCertSha256EndpointForOutbound:(NSDictionary*)outbound settingName:(NSString*)settingName tlsSettings:(NSDictionary*)tlsSettings;
 - (NSMutableDictionary*)runtimeTLSSettingsFromStoredTLSSettings:(NSDictionary*)tlsSettings outbound:(NSDictionary*)outbound settingName:(NSString*)settingName rejectsAllowInsecure:(BOOL)rejectsAllowInsecure;
 - (void)appendRuntimeTLSWarning:(NSString*)message;
@@ -135,7 +136,9 @@ static BOOL helperTunSessionActive = NO;
 static NSDictionary* helperTunSessionStatus = nil;
 static NSString* const kMinimumSupportedXrayTunVersion = @"26.1.23";
 static NSString* const kMinimumRemovedTLSAllowInsecureVersion = @"26.3.27";
-static NSString* const kMinimumRemovedLegacyKCPVersion = @"26.3.27";
+// Xray 26.2.6 rejects legacy mKCP header/seed whenever present, even an empty seed.
+// https://github.com/XTLS/Xray-core/blob/v26.2.6/infra/conf/transport_internet.go#L105-L107
+static NSString* const kMinimumRemovedLegacyKCPVersion = @"26.2.6";
 static int const kXrayTunFDTarget = 3;
 
 static NSString* const kStoredTunLeaseIdKey = @"xrayTunLeaseId";
@@ -2884,7 +2887,7 @@ static int normalizedExitCodeFromWaitStatus(int status) {
     }
     NSMutableDictionary* normalizedStreamSettings = normalizedStreamSettingsForXrayForCore(streamSettings, rejectsAllowInsecure);
     if (rejectsLegacyKCP) {
-        // legacy mKCP header & seed were replaced by the finalmask header-* forms
+        // Remove the legacy block inherited from the profile template, even for other transports.
         NSMutableDictionary* kcpSettings = [normalizedStreamSettings[@"kcpSettings"] isKindOfClass:[NSDictionary class]] ? [normalizedStreamSettings[@"kcpSettings"] mutableDeepCopy] : nil;
         if (kcpSettings != nil) {
             [kcpSettings removeObjectForKey:@"header"];
@@ -2893,13 +2896,12 @@ static int normalizedExitCodeFromWaitStatus(int status) {
         }
     }
     NSString* network = [normalizedStreamSettings[@"network"] isKindOfClass:[NSString class]] ? normalizedStreamSettings[@"network"] : @"";
-    if ([network isEqualToString:@"xhttp"] || [network isEqualToString:@"grpc"]) {
-        // both transports run over HTTP/2, a stored http/1.1 alpn breaks them
+    if ([network isEqualToString:@"ws"] || [network isEqualToString:@"httpupgrade"]) {
+        // These transports require HTTP/1.1; leave explicit ALPN values intact.
         for (NSString* tlsSettingName in @[@"tlsSettings", @"xtlsSettings"]) {
             NSMutableDictionary* tlsSettings = [normalizedStreamSettings[tlsSettingName] isKindOfClass:[NSDictionary class]] ? [normalizedStreamSettings[tlsSettingName] mutableDeepCopy] : nil;
-            NSArray* alpn = [tlsSettings[@"alpn"] isKindOfClass:[NSArray class]] ? tlsSettings[@"alpn"] : nil;
-            if (alpn.count == 1 && [alpn[0] isEqualToString:@"http/1.1"]) {
-                [tlsSettings removeObjectForKey:@"alpn"];
+            if (tlsSettings != nil && tlsSettings[@"alpn"] == nil) {
+                tlsSettings[@"alpn"] = @[@"http/1.1"];
                 normalizedStreamSettings[tlsSettingName] = tlsSettings;
             }
         }

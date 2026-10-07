@@ -28,14 +28,12 @@
                                   @"security": @"none",
                                   @"tlsSettings": @{
                                            @"serverName": @"server.cc",
-                                           @"alpn": @[@"http/1.1"],
                                            @"allowInsecure": [NSNumber numberWithBool:NO],
                                            @"verifyPeerCertByName": @"",
                                            @"allowInsecureCiphers": [NSNumber numberWithBool:NO]
                                            },
                                     @"xtlsSettings": @{
                                            @"serverName": @"server.cc",
-                                           @"alpn": @[@"http/1.1"],
                                            @"allowInsecure": [NSNumber numberWithBool:NO],
                                            @"verifyPeerCertByName": @""
                                            },

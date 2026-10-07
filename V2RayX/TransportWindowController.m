@@ -154,7 +154,7 @@
     [_tlsAllowInsecureCiphersButton setState:[tlsSettings[@"allowInsecureCiphers"] boolValue]];
     NSArray* alpnArray = streamSettings[@"tlsSettings"][@"alpn"];
     NSString* alpnString = [alpnArray componentsJoinedByString:@","];
-    [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"http/1.1")];
+    [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"")];
     [_tlsServerNameField setStringValue:streamSettings[@"tlsSettings"][@"serverName"]];
     [_realityFingerprint setStringValue:nilCoalescing(tlsSettings[@"fingerprint"], @"chrome")];
     NSDictionary* activeTLSSettings = [self activeTLSSettingsFromStreamSettings:streamSettings];
@@ -184,7 +184,7 @@
         [_tlsAiButton setState:[xtlsSettings[@"allowInsecure"] boolValue]];
         alpnArray = streamSettings[@"xtlsSettings"][@"alpn"];
         alpnString = [alpnArray componentsJoinedByString:@","];
-        [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"http/1.1")];
+        [_tlsAlpnField setStringValue:nilCoalescing(alpnString, @"")];
         [_tlsServerNameField setStringValue:streamSettings[@"xtlsSettings"][@"serverName"]];
         [_realityFingerprint setStringValue:nilCoalescing(xtlsSettings[@"fingerprint"], @"chrome")];
     }
@@ -319,14 +319,17 @@
     NSMutableDictionary* tlsSettingsToSave = [@{
             @"serverName": [_tlsServerNameField stringValue],
             @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
-            @"allowInsecureCiphers": [NSNumber numberWithBool:[self->_tlsAllowInsecureCiphersButton state]==1],
-            @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
+            @"allowInsecureCiphers": [NSNumber numberWithBool:[self->_tlsAllowInsecureCiphersButton state]==1]
     } mutableCopy];
     NSMutableDictionary* xtlsSettingsToSave = [@{
             @"serverName": [_tlsServerNameField stringValue],
-            @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1],
-            @"alpn": [[[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""] componentsSeparatedByString:@","]
+            @"allowInsecure": [NSNumber numberWithBool:[self->_tlsAiButton state]==1]
     } mutableCopy];
+    NSString* alpnToSave = [[_tlsAlpnField stringValue] stringByReplacingOccurrencesOfString:@" " withString:@""];
+    if (alpnToSave.length > 0) {
+        tlsSettingsToSave[@"alpn"] = [alpnToSave componentsSeparatedByString:@","];
+        xtlsSettingsToSave[@"alpn"] = tlsSettingsToSave[@"alpn"];
+    }
 
     NSString* enteredPin = [[_tlsPinnedPeerCertSha256Field stringValue] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (enteredPin.length > 0) {
